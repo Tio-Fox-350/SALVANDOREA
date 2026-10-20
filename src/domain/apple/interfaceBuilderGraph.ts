@@ -43,6 +43,8 @@ export interface InterfaceBuilderDocumentInput {
   readonly numberLiterals?: PlistNumberLiterals;
   /** Serialized hierarchy links omitted before normalized graph projection. */
   readonly omittedSerializedHierarchyReferences?: number;
+  /** Whether the object budget, rather than the archive, caused that omission. */
+  readonly serializedHierarchyLimitReached?: boolean;
 }
 
 type InvestigationNode = z.infer<typeof nativeInvestigationNodeSchema>;
@@ -155,6 +157,9 @@ export const buildInterfaceBuilderAnalysis = (input: {
     let connectionEdgeCount = 0;
     let hierarchyEdgeCount = 0;
     let documentOmittedConnections = 0;
+    // Edges dropped by the connection edge budget, as opposed to connection
+    // edges whose source node did not fit the graph object budget.
+    let documentConnectionBudgetOmissions = 0;
     let documentOmittedHierarchyEdges = 0;
     let hierarchyTruncated = false;
     const objectNodeId = (objectId: string): string =>
@@ -175,6 +180,7 @@ export const buildInterfaceBuilderAnalysis = (input: {
         } else {
           omittedConnections += 1;
           documentOmittedConnections += 1;
+          documentConnectionBudgetOmissions += 1;
         }
         return;
       }
@@ -508,13 +514,15 @@ export const buildInterfaceBuilderAnalysis = (input: {
             ? "partial"
             : "complete",
         reason:
-          connectionsTruncated || documentOmittedConnections > 0
+          connectionsTruncated || documentConnectionBudgetOmissions > 0
             ? "connection_limit_reached"
-            : connectionsUnresolved
-              ? "connection_unresolved"
-              : unsupportedConnections
-                ? "unsupported_connection_type"
-                : null,
+            : documentOmittedConnections > 0
+              ? "graph_limit_reached"
+              : connectionsUnresolved
+                ? "connection_unresolved"
+                : unsupportedConnections
+                  ? "unsupported_connection_type"
+                  : null,
         examined: Math.min(
           parsed.connections.length,
           input.limits.max_connections,
@@ -535,7 +543,9 @@ export const buildInterfaceBuilderAnalysis = (input: {
           parserOmittedHierarchyReferences > 0
             ? "archive_hierarchy_references_missing"
             : omittedSerializedHierarchyReferences > 0
-              ? "serialized_view_hierarchy_incomplete"
+              ? document.serializedHierarchyLimitReached === true
+                ? "graph_limit_reached"
+                : "serialized_view_hierarchy_incomplete"
               : parsed.hierarchy.length === 0
                 ? "archive_hierarchy_not_decoded"
                 : hierarchyTruncated

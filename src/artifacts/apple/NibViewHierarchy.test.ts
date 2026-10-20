@@ -17,6 +17,7 @@ describe("serialized NIB view hierarchy bounds", () => {
     expect(projectNibViewHierarchy([object(0)], new Set([0]))).toEqual({
       hierarchy: null,
       omitted: 0,
+      limitReached: false,
     });
   });
 
@@ -37,6 +38,7 @@ describe("serialized NIB view hierarchy bounds", () => {
         },
       ],
       omitted: 0,
+      limitReached: false,
     });
   });
 
@@ -44,6 +46,7 @@ describe("serialized NIB view hierarchy bounds", () => {
     expect(projectNibViewHierarchy([object(0, 99)], new Set([0]))).toEqual({
       hierarchy: [],
       omitted: 1,
+      limitReached: false,
     });
   });
 
@@ -59,7 +62,11 @@ describe("serialized NIB view hierarchy bounds", () => {
         ],
         new Set([0]),
       ),
-    ).toEqual({ hierarchy: [{ objectID: "0", children: [] }], omitted: 1 });
+    ).toEqual({
+      hierarchy: [{ objectID: "0", children: [] }],
+      omitted: 1,
+      limitReached: false,
+    });
   });
 
   it("marks unsupported serialized parent values as incomplete", () => {
@@ -68,7 +75,7 @@ describe("serialized NIB view hierarchy bounds", () => {
         [{ id: 0, class_name: "NSView", values: { NSSuperview: "unknown" } }],
         new Set([0]),
       ),
-    ).toEqual({ hierarchy: null, omitted: 1 });
+    ).toEqual({ hierarchy: null, omitted: 1, limitReached: false });
   });
 
   it("reports cyclic and self-referential parentage as incomplete", () => {
@@ -80,6 +87,7 @@ describe("serialized NIB view hierarchy bounds", () => {
     ).toEqual({
       hierarchy: [],
       omitted: 3,
+      limitReached: false,
     });
   });
 
@@ -89,6 +97,7 @@ describe("serialized NIB view hierarchy bounds", () => {
     ).toEqual({
       hierarchy: [],
       omitted: 1,
+      limitReached: false,
     });
   });
 
@@ -106,10 +115,10 @@ describe("serialized NIB view hierarchy bounds", () => {
     const objects = Array.from({ length: 20_002 }, (_, id) =>
       object(id, id === 0 ? undefined : 0),
     );
+    // The record bound is the caller's object budget, so the omission names it.
     expect(
-      projectNibViewHierarchy(objects, new Set(objects.map(({ id }) => id)))
-        .omitted,
-    ).toBe(2);
+      projectNibViewHierarchy(objects, new Set(objects.map(({ id }) => id))),
+    ).toMatchObject({ omitted: 2, limitReached: true });
   });
 });
 
@@ -163,6 +172,7 @@ describe("legacy NIB hierarchy preservation", () => {
         { objectID: "parent", children: [{ objectID: "child", children: [] }] },
       ],
       omitted: 0,
+      limitReached: false,
     });
   });
   it("reports conflicting encoded parents rather than dropping a link silently", () => {
@@ -184,6 +194,7 @@ describe("legacy NIB hierarchy preservation", () => {
     expect(mergeNibHierarchies(legacy, recovered)).toEqual({
       hierarchy: legacy,
       omitted: 1,
+      limitReached: false,
     });
   });
 });

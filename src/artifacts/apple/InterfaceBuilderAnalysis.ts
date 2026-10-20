@@ -183,7 +183,10 @@ export const analyzeInterfaceBuilderBundle = async (input: {
           ...(numberLiterals === undefined ? {} : { numberLiterals }),
           ...(nib === null || nib.omitted === 0
             ? {}
-            : { omittedSerializedHierarchyReferences: nib.omitted }),
+            : {
+                omittedSerializedHierarchyReferences: nib.omitted,
+                serializedHierarchyLimitReached: nib.limitReached,
+              }),
         });
       } catch (cause: unknown) {
         if (input.signal?.aborted === true) throw cause;
@@ -607,6 +610,7 @@ const projectNibArchive = (
     });
   }
   let hierarchyOmitted = 0;
+  let hierarchyLimitReached = false;
   let hierarchyNodeCount = 0;
   const hierarchyFor = (
     objectId: number,
@@ -619,6 +623,7 @@ const projectNibArchive = (
     }
     if (hierarchyNodeCount >= maxHierarchyNodes) {
       hierarchyOmitted += 1;
+      hierarchyLimitReached = true;
       return null;
     }
     if (!budget.tryReserve(128)) {
@@ -680,6 +685,10 @@ const projectNibArchive = (
   );
   return {
     omitted: viewHierarchy.omitted + hierarchyOmitted + merged.omitted,
+    limitReached:
+      hierarchyLimitReached ||
+      viewHierarchy.limitReached ||
+      merged.limitReached,
     unresolvedConnections,
     raw: jsonValueSchema.parse({
       "com.apple.ibtool.document.objects": objects,

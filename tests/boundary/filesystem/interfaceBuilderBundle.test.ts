@@ -547,7 +547,7 @@ describe("bounded Interface Builder archive decoding", () => {
       expect.objectContaining({
         facet: "hierarchy:RepeatedHierarchy.nib",
         status: "partial",
-        reason: "serialized_view_hierarchy_incomplete",
+        reason: "graph_limit_reached",
       }),
     );
   });
@@ -1404,6 +1404,57 @@ describe("NIBArchive UIKit event connections", () => {
 });
 
 describe("NIBArchive ownerless connector accounting", () => {
+  it("attributes connections without retained endpoints to the object budget", async () => {
+    const root = await createTestTempDirectory("rea-ib-object-limit-");
+    const bundle = join(root, "Example.app");
+    await mkdir(bundle, { recursive: true });
+    await writeFile(
+      join(bundle, "Cell.nib"),
+      encodeNibArchiveFixture({
+        classes: [
+          "UIProxyObject",
+          "UIClassSwapper",
+          "UIButton",
+          "UIRuntimeEventConnection",
+          "NSString",
+        ],
+        objects: [
+          { classIndex: 0, values: { UIProxiedObjectIdentifier: { ref: 4 } } },
+          { classIndex: 1, values: { UIClassName: { ref: 5 } } },
+          { classIndex: 2, values: {} },
+          {
+            classIndex: 3,
+            values: {
+              UISource: { ref: 2 },
+              UIDestination: { ref: 1 },
+              UILabel: { ref: 6 },
+              UIEventMask: 64,
+            },
+          },
+          { classIndex: 4, values: { "NS.bytes": "IBFilesOwner" } },
+          { classIndex: 4, values: { "NS.bytes": "BuildCell" } },
+          { classIndex: 4, values: { "NS.bytes": "buildTapped:" } },
+        ],
+      }),
+    );
+
+    const analysis = await analyzeInterfaceBuilderBundle({
+      bundlePath: bundle,
+      targetSha256: "e".repeat(64),
+      limits: { max_objects: 1 },
+    });
+
+    // The connection fits its own budget; only the object budget dropped its
+    // source, so raising that budget is what recovers it.
+    expect(analysis.graph.coverage).toContainEqual(
+      expect.objectContaining({
+        facet: "connections:Cell.nib",
+        status: "partial",
+        reason: "graph_limit_reached",
+      }),
+    );
+  });
+
   it("keeps a connection dropped by the limit reported as a limit", async () => {
     const root = await createTestTempDirectory("rea-ib-ownerless-limit-");
     const bundle = join(root, "Example.app");

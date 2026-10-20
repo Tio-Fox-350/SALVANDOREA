@@ -17,7 +17,8 @@ export const projectNibViewHierarchy = (
     objects,
     retainedIds,
   );
-  if (parents.size === 0) return { hierarchy: null, omitted: invalid };
+  if (parents.size === 0)
+    return { hierarchy: null, omitted: invalid, limitReached: false };
   const children = new Map<number, number[]>();
   for (const [child, parent] of parents) {
     if (!retainedIds.has(parent) || !retainedIds.has(child)) continue;
@@ -31,9 +32,11 @@ export const projectNibViewHierarchy = (
   for (const id of involved)
     if (!parents.has(id)) pending.push({ id, depth: 0, output: roots });
   const visited = new Set<number>();
+  let limitReached = false;
   while (pending.length > 0) {
     const item = pending.pop();
     if (item === undefined) break;
+    if (!visited.has(item.id) && visited.size >= maxNodes) limitReached = true;
     if (
       visited.has(item.id) ||
       item.depth > 128 ||
@@ -50,6 +53,7 @@ export const projectNibViewHierarchy = (
   return {
     hierarchy: roots,
     omitted: involved.size - visited.size + invalid,
+    limitReached,
   };
 };
 
@@ -83,6 +87,7 @@ export const mergeNibHierarchies = (
     );
   }
   let omitted = 0;
+  let limitReached = false;
   const additions = recovered.map((node) => ({
     node,
     output: legacy,
@@ -94,6 +99,7 @@ export const mergeNibHierarchies = (
     let target = existing.get(entry.node.objectID);
     if (target === undefined) {
       if (existing.size >= maxNodes || !reserveNode()) {
+        if (existing.size >= maxNodes) limitReached = true;
         omitted += 1;
         continue;
       }
@@ -126,7 +132,7 @@ export const mergeNibHierarchies = (
         parent: target.objectID,
       });
   }
-  return { hierarchy: legacy, omitted };
+  return { hierarchy: legacy, omitted, limitReached };
 };
 
 const wouldCycle = (

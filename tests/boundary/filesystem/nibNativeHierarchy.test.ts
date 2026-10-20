@@ -178,10 +178,13 @@ describe.skipIf(!xcodeIbtoolAvailable)(
         });
         expect(result.documents[0]?.hierarchy_complete).toBe(false);
         expect(result.graph.truncated).toBe(true);
+        // Raising the object budget recovers these links, so the reason must
+        // name that budget rather than an incomplete serialized hierarchy.
         expect(result.graph.coverage).toContainEqual(
           expect.objectContaining({
             facet: "hierarchy:Contents/Resources/Main.nib",
             status: "partial",
+            reason: "graph_limit_reached",
           }),
         );
       },
