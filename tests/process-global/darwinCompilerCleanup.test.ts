@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
-import { access, readFile, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fault = vi.hoisted(() => ({
@@ -288,6 +297,80 @@ it.skipIf(process.platform === "win32")(
     expect(result.error.cleanupIncomplete).toBe(false);
     expect(result.error.capturedOutput?.exit_code).toBe(7);
   },
+);
+
+it.skipIf(process.platform === "win32")(
+  "retains the compiler scratch root until an inherited-pipe descendant exits after output cutoff",
+  async () => {
+    const fixture = await mkdtemp(join(tmpdir(), "rea-compiler-root-replay-"));
+    const compiler = join(fixture, "swiftc");
+    const finished = join(fixture, "finished.json");
+    const childSource = `const fs = require('node:fs'); const path = require('node:path'); setTimeout(() => { fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({ tempRootExists: fs.existsSync(path.dirname(process.env.TMPDIR)) })); process.exit(0); }, 9000);`;
+    await writeFile(
+      compiler,
+      `#!${process.execPath}\nconst { spawn } = require('node:child_process');\nspawn(process.execPath, ['-e', ${JSON.stringify(childSource)}], { stdio: 'inherit' });\nprocess.exit(0);\n`,
+      { mode: 0o700 },
+    );
+    await chmod(compiler, 0o700);
+    const reader = createDarwinProcessRunTokenReader({
+      compiler: { kind: "swiftc", executable: compiler, sdkRoot: "/fake-sdk" },
+      compileTimeoutMs: 1000,
+      moduleCachePath: "",
+    });
+    readers.push(reader);
+    const started = performance.now();
+    let failure: unknown;
+    let observation: { tempRootExists: boolean } | undefined;
+    try {
+      try {
+        await reader.prepare();
+      } catch (cause: unknown) {
+        failure = cause;
+      }
+      for (let attempt = 0; attempt < 120; attempt++) {
+        try {
+          observation = JSON.parse(await readFile(finished, "utf8")) as {
+            tempRootExists: boolean;
+          };
+          break;
+        } catch (cause: unknown) {
+          if (
+            !(
+              cause instanceof Error &&
+              "code" in cause &&
+              cause.code === "ENOENT"
+            )
+          )
+            throw cause;
+        }
+        await delay(100);
+      }
+      expect(failure).toBeInstanceOf(DarwinProcessOwnershipInspectionError);
+      expect(observation).toEqual({ tempRootExists: true });
+      expect(performance.now() - started).toBeLessThan(12_000);
+    } finally {
+      fault.blocked = false;
+      await reader.close();
+      for (let attempt = 0; attempt < 120; attempt++) {
+        try {
+          await readFile(finished);
+          break;
+        } catch (cause: unknown) {
+          if (
+            !(
+              cause instanceof Error &&
+              "code" in cause &&
+              cause.code === "ENOENT"
+            )
+          )
+            throw cause;
+        }
+        await delay(100);
+      }
+      await rm(fixture, { recursive: true, force: true });
+    }
+  },
+  30_000,
 );
 
 it.skipIf(process.platform !== "darwin").each([false, true])(

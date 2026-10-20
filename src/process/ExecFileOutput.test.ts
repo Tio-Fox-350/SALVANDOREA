@@ -272,6 +272,42 @@ describe.skipIf(process.platform === "win32")(
       }
     });
 
+    it("settles after the grace when an exited command's descendant holds its output open", async () => {
+      const directory = await createTestTempDirectory("rea-exec-descendant-");
+      const pidFile = join(directory, "descendant.pid");
+      const script = [
+        'const { spawn } = require("node:child_process");',
+        'const fs = require("node:fs");',
+        'const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: ["ignore", "inherit", "inherit"] });',
+        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+        "child.unref();",
+        'process.stdout.write("kuna 1.833\\n");',
+      ].join("\n");
+      const started = Date.now();
+      try {
+        await expect(
+          execFileOutput(process.execPath, ["-e", script], {
+            timeout: 500,
+            stopSignal: "SIGTERM",
+          }),
+        ).rejects.toMatchObject({
+          code: "ETIMEDOUT",
+          killed: true,
+          outputReadersCutOff: true,
+        });
+        expect(Date.now() - started).toBeLessThan(15_000);
+      } finally {
+        const pid = Number(await readFile(pidFile, "utf8").catch(() => ""));
+        if (Number.isSafeInteger(pid) && pid > 0)
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // The descendant may already have exited.
+          }
+        await rm(directory, { recursive: true, force: true });
+      }
+    }, 30_000);
+
     it("kills a timed-out process that ignores the stop signal", async () => {
       const script = [
         'for (const name of ["SIGINT", "SIGTERM"]) process.on(name, () => {});',

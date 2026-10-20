@@ -9,17 +9,18 @@ type ExecFileOutputOptions = Omit<
 > & {
   readonly maxBuffer?: number;
   /**
-   * Signal that stops the process on abort or timeout. The promise then
-   * settles only after the process exits, so the caller can remove files it
-   * writes; a process still running after a grace period is killed. Without
-   * it, Node's execFile sends SIGTERM on abort and rejects before the
-   * process exits.
+   * Signal that stops the process on abort or timeout. The promise settles
+   * after the leader exits and its output readers close, or after stop grace
+   * ends with readers cut off when a descendant inherited the pipes. Callers
+   * that remove scratch directories must not treat reader cutoff as family
+   * completion. Without `stopSignal`, Node's execFile sends SIGTERM on abort
+   * and rejects before the process exits.
    */
   readonly stopSignal?: NodeJS.Signals;
 };
 
 /** How long a stopped process may take to exit before it is killed. */
-const STOP_GRACE_MS = 5_000;
+export const EXEC_FILE_OUTPUT_STOP_GRACE_MS = 5_000;
 
 /** Cancellation observed by the command owner, with the caller's exact reason. */
 export class ExecFileOutputCancelledError extends Error {
@@ -81,6 +82,10 @@ export interface ExecFileOutputFailure {
   readonly stdoutBytes?: number;
   readonly stderrBytes?: number;
   readonly collectionFailure?: boolean;
+  /** Leader PID for a stoppable command; unset when spawn never reported one. */
+  readonly leaderPid?: number;
+  /** Output readers were destroyed after stop grace while the family may remain. */
+  readonly outputReadersCutOff?: boolean;
 }
 
 /** Read captured output metadata from a failed execFileOutput invocation. */
@@ -97,6 +102,8 @@ export const execFileOutputFailure = (
   const stdoutBytes = Reflect.get(cause, "stdoutBytes");
   const stderrBytes = Reflect.get(cause, "stderrBytes");
   const collectionFailure = Reflect.get(cause, "collectionFailure");
+  const leaderPid = Reflect.get(cause, "leaderPid");
+  const outputReadersCutOff = Reflect.get(cause, "outputReadersCutOff");
   if (typeof stdout !== "string" || typeof stderr !== "string")
     return undefined;
   return {
@@ -118,6 +125,12 @@ export const execFileOutputFailure = (
     outputTruncated:
       outputTruncated === true || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
     ...(collectionFailure === true ? { collectionFailure: true } : {}),
+    ...(typeof leaderPid === "number" &&
+    Number.isSafeInteger(leaderPid) &&
+    leaderPid > 0
+      ? { leaderPid }
+      : {}),
+    ...(outputReadersCutOff === true ? { outputReadersCutOff: true } : {}),
   };
 };
 
@@ -141,6 +154,12 @@ export const execFileBytes = (
     let stopped: "abort" | "timeout" | undefined;
     let deadline: NodeJS.Timeout | undefined;
     let grace: NodeJS.Timeout | undefined;
+    let outputReadersCutOff = false;
+    let leaderPid: number | undefined;
+    const attachCommandMetadata = (value: object): void => {
+      if (leaderPid !== undefined) Reflect.set(value, "leaderPid", leaderPid);
+      if (outputReadersCutOff) Reflect.set(value, "outputReadersCutOff", true);
+    };
     const child = execFile(
       command,
       [...arguments_],
@@ -175,18 +194,28 @@ export const execFileBytes = (
           Reflect.set(failure, "stderr", stderr.toString("utf8"));
           Reflect.set(failure, "stdoutBytes", stdout.byteLength);
           Reflect.set(failure, "stderrBytes", stderr.byteLength);
+          attachCommandMetadata(failure);
           reject(failure);
           return;
         }
         resolve({ stdout, stderr });
       },
     );
+    if (child.pid !== undefined) leaderPid = child.pid;
     // The first stop request names the failure; a later one is not resent.
     const stop = (reason: "abort" | "timeout"): void => {
       if (stopped !== undefined) return;
       stopped = reason;
       child.kill(stopSignal);
-      grace = setTimeout(() => child.kill("SIGKILL"), STOP_GRACE_MS);
+      grace = setTimeout(() => {
+        child.kill("SIGKILL");
+        // execFile settles only once every output pipe closes. A descendant
+        // that inherited them can hold them open after the command exits, so
+        // stop reading at the end of the grace instead of waiting for it.
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        outputReadersCutOff = true;
+      }, EXEC_FILE_OUTPUT_STOP_GRACE_MS);
     };
     const onAbort = (): void => {
       stop("abort");
