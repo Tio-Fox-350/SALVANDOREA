@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, stat } from "node:fs/promises";
+import { access, lstat, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type {
@@ -240,7 +240,7 @@ const cacheCheck = async (
       };
     await access(cacheRoot, constants.W_OK | constants.X_OK);
   } catch (cause: unknown) {
-    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") {
+    if (isMissing(cause)) {
       const creatable = await nearestDirectoryWritable(cacheRoot);
       return creatable.ok
         ? {
@@ -285,13 +285,17 @@ const cacheCheck = async (
   };
 };
 
-/** Whether the nearest existing ancestor is a directory REA may create entries in. */
+/**
+ * Whether the nearest existing entry on `path` is a directory REA may create
+ * entries in. A missing target is only absent when no entry occupies its name;
+ * a dangling symbolic link blocks creation just as a regular file does.
+ */
 const nearestDirectoryWritable = async (
   path: string,
 ): Promise<
   { readonly ok: true } | { readonly ok: false; readonly reason: string }
 > => {
-  let candidate = dirname(path);
+  let candidate = path;
   for (;;) {
     try {
       if (!(await stat(candidate)).isDirectory())
@@ -299,15 +303,33 @@ const nearestDirectoryWritable = async (
       await access(candidate, constants.W_OK | constants.X_OK);
       return { ok: true };
     } catch (cause: unknown) {
-      const missing =
-        cause instanceof Error && "code" in cause && cause.code === "ENOENT";
       const parent = dirname(candidate);
-      if (!missing || parent === candidate)
+      const absent = isMissing(cause) && (await entryAbsent(candidate));
+      if (absent !== true || parent === candidate)
         return {
           ok: false,
-          reason: `${candidate} is not writable: ${cause instanceof Error ? cause.message : String(cause)}`,
+          reason:
+            typeof absent === "string"
+              ? absent
+              : `${candidate} is not writable: ${cause instanceof Error ? cause.message : String(cause)}`,
         };
       candidate = parent;
     }
+  }
+};
+
+const isMissing = (cause: unknown): boolean =>
+  cause instanceof Error && "code" in cause && cause.code === "ENOENT";
+
+/** True when nothing occupies `path`; otherwise why its name is unusable. */
+const entryAbsent = async (path: string): Promise<true | string> => {
+  try {
+    return (await lstat(path)).isSymbolicLink()
+      ? `${path} is a symbolic link whose target does not exist.`
+      : `${path} exists but cannot be resolved.`;
+  } catch (cause: unknown) {
+    return isMissing(cause)
+      ? true
+      : `${path} cannot be inspected: ${cause instanceof Error ? cause.message : String(cause)}`;
   }
 };

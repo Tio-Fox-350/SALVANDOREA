@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readlink, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { expect, it as test } from "vitest";
@@ -137,6 +137,49 @@ it("reports a cache root REA cannot create under its nearest existing parent", a
     // stat reports ENOTDIR for a path beneath a regular file.
     detail: expect.stringContaining("not a directory"),
   });
+});
+
+it("reports a dangling cache link as unusable and accepts a resolving link", async () => {
+  const root = await createTestTempDirectory("rea-kuna-doctor-link-");
+  const kuna = await writeFakeKuna(root);
+  const dangling = join(root, "dangling");
+  const missing = join(root, "missing-target");
+  await symlink(missing, dangling);
+  const target = join(root, "target");
+  await mkdir(target);
+  const resolving = join(root, "resolving");
+  await symlink(target, resolving);
+
+  const direct = await inspectKunaProvider({
+    REA_KUNA_COMMAND: kuna,
+    REA_KUNA_CACHE_DIR: dangling,
+  });
+  const beneath = await inspectKunaProvider({
+    REA_KUNA_COMMAND: kuna,
+    REA_KUNA_CACHE_DIR: join(dangling, "nested", "cache"),
+  });
+  const ready = await inspectKunaProvider({
+    REA_KUNA_COMMAND: kuna,
+    REA_KUNA_CACHE_DIR: resolving,
+  });
+
+  for (const blocked of [direct, beneath])
+    expect(blocked.checks[1]).toMatchObject({
+      name: "cache",
+      ok: false,
+      code: "open_options_invalid",
+      detail: expect.stringContaining(
+        `${dangling} is a symbolic link whose target does not exist.`,
+      ),
+    });
+  expect(ready.checks[1]).toMatchObject({
+    name: "cache",
+    ok: true,
+    detail: expect.stringContaining(`cached in ${resolving}`),
+  });
+  // Diagnosis neither creates the cache nor repairs the link.
+  expect(await readlink(dangling)).toBe(missing);
+  await expect(lstat(missing)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 const doctorEnvironment = (root: string, kuna: string): NodeJS.ProcessEnv => ({
