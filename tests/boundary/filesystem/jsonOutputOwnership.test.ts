@@ -189,12 +189,14 @@ it("preserves cancellation when staging cleanup also fails", async () => {
   const root = await createTestTempDirectory("rea-json-cancel-");
   const resources = new ArtifactResourceScope();
   const controller = new AbortController();
+  let unexpected: string | undefined;
   try {
     function* cancelledParts(): Generator<string> {
       const directories = requireStages(root);
       if (directories.length !== 1)
         throw new Error("Expected one staging directory");
-      writeFileSync(join(root, directories[0]!, "unexpected"), "retain this");
+      unexpected = join(root, directories[0]!, "unexpected");
+      writeFileSync(unexpected, "retain this");
       controller.abort();
       yield "must not publish";
     }
@@ -208,15 +210,21 @@ it("preserves cancellation when staging cleanup also fails", async () => {
     if (result.ok) throw new Error("Expected cancellation");
     expect(result.error).toBeInstanceOf(AnalysisCancelledError);
     expect(result.error.cleanupIncomplete).toBe(true);
-    expect(result.error.cause).toMatchObject({
-      cause: expect.any(AnalysisCancelledError),
-      owner: { directory: expect.stringContaining(".rea-write-") },
+    expect(result.error.cause).toBe(controller.signal.reason);
+    expect(result.error.cleanupPrimary).toBeInstanceOf(AnalysisCancelledError);
+    expect(result.error.cleanupPrimary).toMatchObject({
+      operation: "export_evidence_bundle",
     });
+    expect(result.error.cleanupPrimary?.cause).toBe(controller.signal.reason);
+    const stages = requireStages(root);
+    expect(stages).toHaveLength(1);
+    expect(result.error.cleanupResources).toEqual([join(root, stages[0]!)]);
+    expect(await fs.readFile(unexpected!, "utf8")).toBe("retain this");
     await expect(fs.access(join(root, "cancelled.json"))).rejects.toThrow();
-    const stage = requireStages(root)[0];
-    if (stage !== undefined) await fs.rm(join(root, stage, "unexpected"));
   } finally {
+    if (unexpected !== undefined) await fs.rm(unexpected, { force: true });
     await resources.close();
+    expect(requireStages(root)).toEqual([]);
     await rm(root, { recursive: true, force: true });
   }
 });
