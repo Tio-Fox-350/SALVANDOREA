@@ -12,6 +12,7 @@ import {
   allowedSanitizedUrl,
   recordValue,
   cdpStringValue,
+  numberValue,
 } from "./CdpCaptureValues.js";
 import { mainFrameUrl } from "./CdpCaptureDocuments.js";
 import { captureFrames } from "./CdpCaptureDocuments.js";
@@ -73,10 +74,43 @@ export const captureCdpScreenshot = async (
   let result: ReturnType<typeof recordValue>;
   let after: unknown;
   try {
+    const metrics = recordValue(
+      await context.connection.send(
+        "Page.getLayoutMetrics",
+        {},
+        context.sessionId,
+        context.signal,
+      ),
+    );
+    const visualViewport = recordValue(metrics?.visualViewport);
+    const pageX = numberValue(visualViewport?.pageX);
+    const pageY = numberValue(visualViewport?.pageY);
+    const width = numberValue(visualViewport?.clientWidth);
+    const height = numberValue(visualViewport?.clientHeight);
+    const scale = numberValue(visualViewport?.scale);
+    if (
+      pageX === undefined ||
+      pageY === undefined ||
+      width === undefined ||
+      height === undefined ||
+      scale === undefined ||
+      width <= 0 ||
+      height <= 0 ||
+      scale <= 0
+    )
+      throw new BrowserObservationError("inspect_web_page", "protocol_error");
+    // Use the CDP visual viewport units and scale as a pair. Its client size
+    // already reflects page scale, so dividing the dimensions by scale again
+    // would clip visible content.
     result = recordValue(
       await context.connection.send(
         "Page.captureScreenshot",
-        { format: "png", fromSurface: true, captureBeyondViewport: false },
+        {
+          format: "png",
+          fromSurface: true,
+          captureBeyondViewport: true,
+          clip: { x: pageX, y: pageY, width, height, scale },
+        },
         context.sessionId,
         context.signal,
       ),
