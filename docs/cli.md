@@ -440,7 +440,9 @@ truncation alone does not change the diagnostic health or exit status.
 The default terminal format is TOON. Use `--json` when saving results for a
 JSON consumer. Valued output flags (`--format`, `--filter-output`,
 `--token-limit`, `--token-offset`) accept `--flag value` or `--flag=value`; a
-missing value fails with `MISSING_OUTPUT_VALUE` before the command runs. `--json` is indented on a terminal and compact when piped or
+missing value fails with `MISSING_OUTPUT_VALUE` before the command runs. After
+`--json` or a structured `--format`, a malformed `--format`, `--token-limit`, or
+`--token-offset` value fails with `INVALID_OUTPUT_VALUE` in that format. `--json` is indented on a terminal and compact when piped or
 redirected, which keeps large results smaller for agents and scripts; pipe
 through `jq .` for indented files. Output selection and formatting do not change
 operation status.

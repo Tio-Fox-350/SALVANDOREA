@@ -62,7 +62,8 @@ export type CliOutputArgumentValidation =
       readonly code:
         | "UNSUPPORTED_OUTPUT_COMBINATION"
         | "INVALID_OUTPUT_FILTER"
-        | "MISSING_OUTPUT_VALUE";
+        | "MISSING_OUTPUT_VALUE"
+        | "INVALID_OUTPUT_VALUE";
       readonly message: string;
     };
 
@@ -72,6 +73,12 @@ interface ParsedCliOutputArguments {
   readonly fullOutput: boolean;
   /** First valued output flag that Incur skips because it has no value. */
   readonly missingValue: string | undefined;
+  /**
+   * Malformed output flag value Incur would reject while a structured format
+   * (JSON, JSONL, or YAML) was already selected.
+   */
+  readonly invalidValue:
+    { readonly flag: string; readonly value: string } | undefined;
   readonly parseError: boolean;
   readonly tokenCount: boolean;
   readonly tokenWindow: boolean;
@@ -87,6 +94,7 @@ export const parseCliOutputArguments = (
   let filterOutput: string | undefined;
   let fullOutput = false;
   let missingValue: string | undefined;
+  let invalidValue: ParsedCliOutputArguments["invalidValue"];
   let tokenCount = false;
   let tokenLimit: number | undefined;
   let tokenOffset: number | undefined;
@@ -95,6 +103,7 @@ export const parseCliOutputArguments = (
     format,
     fullOutput,
     missingValue,
+    invalidValue,
     parseError,
     tokenCount,
     tokenWindow:
@@ -102,6 +111,14 @@ export const parseCliOutputArguments = (
     tokenLimit: parseError ? undefined : tokenLimit,
     tokenOffset: parseError ? undefined : tokenOffset,
   });
+  // Incur stops at a malformed output value and reports it in TOON. Once a
+  // structured format is selected, report it in that format instead.
+  const invalid = (flag: string, value: string): ParsedCliOutputArguments => {
+    if (format !== "json" && format !== "jsonl" && format !== "yaml")
+      return parsed(true);
+    invalidValue = { flag, value };
+    return parsed(false);
+  };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     // Incur scans builtins across `--` and reads spaced value forms, which
@@ -114,8 +131,8 @@ export const parseCliOutputArguments = (
       const value = arguments_[index + 1];
       if (value) {
         // Incur stops parsing at an invalid format before applying any later
-        // output controls. Let it report that malformed flag itself.
-        if (!INCUR_OUTPUT_FORMATS.has(value)) return parsed(true);
+        // output controls. Report it here only after a structured format.
+        if (!INCUR_OUTPUT_FORMATS.has(value)) return invalid(argument, value);
         format = value;
         index += 1;
       } else missingValue ??= argument;
@@ -133,7 +150,7 @@ export const parseCliOutputArguments = (
       if (value) {
         const numericValue = Number(value);
         if (!Number.isFinite(numericValue) || value.trim() === "")
-          return parsed(true);
+          return invalid(argument, value);
         if (argument === "--token-limit") tokenLimit = numericValue;
         else tokenOffset = numericValue;
         index += 1;
@@ -168,9 +185,25 @@ const hasUnclosedFilterSlice = (expression: string): boolean => {
 export const validateCliOutputArguments = (
   arguments_: readonly string[],
 ): CliOutputArgumentValidation => {
-  const { filterOutput, format, missingValue, parseError, tokenWindow } =
-    parseCliOutputArguments(arguments_);
+  const {
+    filterOutput,
+    format,
+    invalidValue,
+    missingValue,
+    parseError,
+    tokenWindow,
+  } = parseCliOutputArguments(arguments_);
   if (parseError) return { ok: true };
+  if (invalidValue !== undefined)
+    return {
+      ok: false,
+      format: format === "yaml" || format === "jsonl" ? format : "json",
+      code: "INVALID_OUTPUT_VALUE",
+      message:
+        invalidValue.flag === "--format"
+          ? `Invalid --format value ${JSON.stringify(invalidValue.value)}. Use one of: ${[...INCUR_OUTPUT_FORMATS].join(", ")}.`
+          : `Invalid ${invalidValue.flag} value ${JSON.stringify(invalidValue.value)}. Use a number.`,
+    };
   if (filterOutput !== undefined && hasUnclosedFilterSlice(filterOutput))
     return {
       ok: false,
