@@ -245,6 +245,14 @@ export const resolveGhidraAnalysisProfile = async (
         annotation_policy: "atomic-function-entry-metadata-v1",
         load_image_observations: "source-mappings-entry-context-v2",
         function_body_evidence: "complete-inclusive-ranges-v1",
+        ...(target.format === "pe" && target.architecture === "x86"
+          ? {
+              borland_seh_recovery:
+                installation.platform === "win32"
+                  ? "observe-only-windows-p0-v1"
+                  : "rtl-identity-gated-unowned-body-gaps-v2",
+            }
+          : {}),
         function_references: "complete-body-and-entry-reference-manager-v2",
         call_relationship_coverage: callRelationshipCoverage,
         function_dossier_coverage: "observed-facets-and-call-relationships-v1",

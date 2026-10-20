@@ -1412,6 +1412,36 @@ describe("Ghidra PE CodeView debug symbol limitations", () => {
 });
 
 describe("Ghidra relationship coverage", () => {
+  it("retains partial callee coverage when a registered SEH handler cannot be recovered", async () => {
+    const coverage = {
+      status: "partial",
+      limitations: ["Known SEH handler has an independent owner."],
+    };
+    const ghidra = provider(installationHost(), () => ({
+      start: () => Promise.resolve(ok(sessionInfo())),
+      callTool: () =>
+        Promise.resolve(
+          ok({
+            value: [],
+            limitations: coverage.limitations,
+            relationship_coverage: coverage,
+          }),
+        ),
+      close: () => Promise.resolve(ok(null)),
+    }));
+    const client = await createElfClient(ghidra);
+    try {
+      const execution = await client.execute("procedure_callees", {
+        procedure: "main",
+      });
+      if (!execution.ok) throw execution.error;
+      expect(execution.value.relationshipCoverage).toEqual(coverage);
+      expect(execution.value.limitations).toContain(coverage.limitations[0]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("marks the full direct call-reference response complete while keeping static caveats", async () => {
     const ghidra = provider(installationHost(), () => ({
       start: () => Promise.resolve(ok(sessionInfo())),

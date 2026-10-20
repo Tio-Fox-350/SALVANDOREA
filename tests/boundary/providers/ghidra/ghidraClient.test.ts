@@ -1986,6 +1986,61 @@ describe("GhidraClient shutdown diagnostics", () => {
   );
 });
 
+it.each([true, false])(
+  "rechecks the full owned group after confirmed shutdown (verified=%s)",
+  async (verified) => {
+    const fixture = new FixtureLauncher();
+    let cleanupAttempts = 0;
+    let cleanupAllowed = verified;
+    const launcher: GhidraLauncher = {
+      launch: async (session) => {
+        const launched = await fixture.launch(session);
+        if (!launched.ok) return launched;
+        return ok({
+          ...launched.value,
+          cleanup: async () => {
+            cleanupAttempts += 1;
+            if (cleanupAttempts > 1) {
+              // The original child exit, rather than a PID lookup, precedes
+              // revalidation. A remaining unverified group still fails closed.
+              expect(await waitForExit(fixture.processes[0])).toBe(true);
+              if (cleanupAllowed)
+                return { cleaned: true as const, signaled: false };
+            }
+            return {
+              cleaned: false as const,
+              reason: "fixture group ownership temporarily unreadable",
+            };
+          },
+        });
+      },
+    };
+    const client = clientFor(launcher);
+    onTestFinished(async () => {
+      cleanupAllowed = true;
+      await client.close();
+    });
+    expect(await client.start()).toMatchObject({ ok: true });
+    const runtime = fixture.runtimeRoots[0];
+    if (runtime === undefined)
+      throw new Error("Fixture runtime was not captured");
+    const closed = await client.close();
+    expect(cleanupAttempts).toBe(2);
+    if (verified) expect(closed).toEqual(ok(null));
+    else {
+      expect(closed).toMatchObject({
+        ok: false,
+        error: { cleanupIncomplete: true },
+      });
+      await access(runtime);
+      cleanupAllowed = true;
+      expect(await client.close()).toEqual(ok(null));
+      expect(cleanupAttempts).toBe(3);
+    }
+    await expect(access(runtime)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
 it("preserves failed startup and retained Ghidra cleanup capabilities until a verified retry", async () => {
   const fixture = new FixtureLauncher("wrong_identity");
   let cleanupAllowed = false;

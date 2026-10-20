@@ -1,6 +1,7 @@
 /** Required packaged sources, selected by their runtime role rather than order. */
 export const GHIDRA_BRIDGE_SOURCES = Object.freeze({
   bridge: "ReaGhidraBridge.java",
+  borlandSeh: "ReaGhidraBorlandSeh.java",
   bundleActivator: "ReaGhidraBundleActivator.java",
   extensions: "ReaGhidraExtensions.java",
   prepareCom: "ReaGhidraPrepareCom.java",
