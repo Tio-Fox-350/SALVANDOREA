@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 
-import { AnalysisCancelledError } from "../domain/analysisErrorCore.js";
+import {
+  AnalysisCancelledError,
+  AnalysisOutputError,
+} from "../domain/analysisErrorCore.js";
 import { BrowserObservationError } from "../domain/browserObservationError.js";
 import { parseEvidence } from "../domain/evidence.js";
 import { browserScenarioInputSchema } from "../domain/browserScenario.js";
@@ -75,6 +78,45 @@ it("converts a raw scenario capture retained after cleanup failure", async () =>
       normalized_result: capture,
     });
   }
+});
+
+it("keeps cancellation and the incomplete capture retained before navigation finished", async () => {
+  const { completeness: _completeness, ...complete } = capture;
+  // The startup failure path retains no steps and no completeness.
+  const incomplete = { ...complete, steps: [] };
+  const failure = new AnalysisCancelledError("capture_browser_scenario", {
+    partialObservation: {
+      kind: "browser-scenario-observation",
+      capture: incomplete,
+    },
+  });
+  const provider: BrowserScenarioCapturePort = {
+    identity: () => ({ id: "fixture", name: "fixture", version: "1" }),
+    captureScenario: async () => err(failure),
+  };
+  const result = await captureBrowserScenario(provider, scenario);
+  if (result.ok) throw new Error("Expected cancellation");
+  expect(result.error).toBe(failure);
+  expect(result.error.partialObservation).toEqual({
+    kind: "browser-scenario-observation",
+    capture: incomplete,
+  });
+});
+
+it("rejects a cancelled capture that claims completeness but is malformed", async () => {
+  const failure = new AnalysisCancelledError("capture_browser_scenario", {
+    partialObservation: {
+      kind: "browser-scenario-observation",
+      capture: { ...capture, steps: [] },
+    },
+  });
+  const provider: BrowserScenarioCapturePort = {
+    identity: () => ({ id: "fixture", name: "fixture", version: "1" }),
+    captureScenario: async () => err(failure),
+  };
+  const result = await captureBrowserScenario(provider, scenario);
+  if (result.ok) throw new Error("Expected failure");
+  expect(result.error).toBeInstanceOf(AnalysisOutputError);
 });
 
 it.each([

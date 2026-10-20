@@ -53,7 +53,13 @@ export const captureBrowserScenario = async (
           provider.identity(),
         );
       } else if (!report.success) {
-        if (captured.error instanceof AnalysisCancelledError)
+        // Only a capture that reports completeness claims to be a completed
+        // report; one cancelled earlier, e.g. during initial navigation, is a
+        // legitimately incomplete observation and keeps its cancellation.
+        if (
+          captured.error instanceof AnalysisCancelledError &&
+          "completeness" in partial.capture
+        )
           return err(
             new AnalysisOutputError(
               OPERATION,
