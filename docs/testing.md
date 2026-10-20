@@ -155,7 +155,9 @@ rejection without a reason. That cleanup stays owned until a later close or
 call releases it. Another server does not open while the cleanup remains, and
 a cleanup that already succeeded is not run again. Pass
 `mcpCall` when a case needs its own server, environment, or lifecycle. CLI
-cases still start a fresh process.
+cases still start a fresh process. `exportedFunctionBindingsCli.test.ts` is the
+exception: its compiled CLI parity checks share one process for the file and
+still compare that process's JSON command results with the MCP session.
 
 The Apple artifact verifier step shares a job-temporary bytecode cache among
 its fresh CLI/MCP children via `REA_ARTIFACT_NODE_COMPILE_CACHE`. The artifact
