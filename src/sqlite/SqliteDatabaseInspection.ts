@@ -484,7 +484,6 @@ const readRows = (
   };
   for (const raw of statement.iterate(limit)) {
     const rawRow = arrayRow.parse(raw);
-    // Hex expansion already belongs to the retained-output budget, before decoding/copying cells.
     budget.beforeDecode(rawRow);
     const values = rawRow.map((value) => cell(value, encoding));
     budget.retain(values);
@@ -507,7 +506,7 @@ export const inspectSqliteDatabaseSnapshot = (
     allowExtension: false,
     readBigInts: true,
     enableDoubleQuotedStringLiterals: false,
-    timeout: 0,
+    timeout: 2000,
     limits: {
       length: SQLITE_DATABASE_LIMITS.outputBytes,
       sqlLength: SQLITE_DATABASE_LIMITS.outputBytes,
