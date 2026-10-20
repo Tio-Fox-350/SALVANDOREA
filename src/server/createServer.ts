@@ -142,6 +142,7 @@ import { registerReverseEngineeringTools } from "./registerReverseEngineeringToo
 import { CutterBridgeClient } from "../cutter/CutterBridgeClient.js";
 import { CutterBridgeService } from "../cutter/CutterBridgeService.js";
 import { registerCutterTools } from "./registerCutterTools.js";
+import { registerX64dbgTools } from "./registerX64dbgTools.js";
 import { GdbSessionManager } from "../gdb/GdbSessionManager.js";
 import { registerGdbTools } from "./registerGdbTools.js";
 import { RizinDebugSessionManager } from "../rizin/RizinDebugSessionManager.js";
@@ -546,6 +547,7 @@ export const createServer = (
       : (evidence) => session.recordEvidence(evidence),
     session,
   );
+  registerX64dbgTools(server, providerEnvironment, toolLogger, delivery);
   registerGdbTools(
     server,
     gdbSessions,
