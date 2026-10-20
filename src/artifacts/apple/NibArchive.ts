@@ -375,10 +375,12 @@ const readValue = (
           ? Number(value)
           : value.toString();
       }
+    // NIBArchive value type 4 is false and 5 is true, as ibtool --export
+    // reports for the same compiled fields.
     case 4:
-      return true;
-    case 5:
       return false;
+    case 5:
+      return true;
     case 6:
       ensureRange(cursor.offset, 4, end, `value ${index}`);
       {

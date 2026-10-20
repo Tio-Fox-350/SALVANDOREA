@@ -75,7 +75,7 @@ const varint = (value: number): Buffer => {
 const encodeValue = (
   value: number | string | boolean | null | { ref: number },
 ): Buffer => {
-  if (typeof value === "boolean") return Buffer.from([value ? 4 : 5]);
+  if (typeof value === "boolean") return Buffer.from([value ? 5 : 4]);
   if (value === null) return Buffer.from([9]);
   if (typeof value === "number") {
     const bytes = Buffer.alloc(5);

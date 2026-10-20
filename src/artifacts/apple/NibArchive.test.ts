@@ -77,6 +77,24 @@ describe("NIBArchive decoder", () => {
     expect(decoded.coder_version).toBe(10);
   });
 
+  it("decodes boolean value type 4 as false and 5 as true", () => {
+    const archive = encodeArchive({
+      classes: ["NSButton"],
+      objects: [{ classIndex: 0, values: { NSControlContinuous: null } }],
+    });
+    // The only value record is key varint 0x80 then one-byte type 9 (nil);
+    // overwrite that type byte to pin the format's own boolean encoding.
+    const typeOffset = archive.readUInt32LE(38) + 1;
+    expect(archive[typeOffset]).toBe(9);
+    const decodeType = (type: number) => {
+      const bytes = Buffer.from(archive);
+      bytes[typeOffset] = type;
+      return decodeNibArchive(bytes).objects[0]?.values.NSControlContinuous;
+    };
+    expect(decodeType(4)).toBe(false);
+    expect(decodeType(5)).toBe(true);
+  });
+
   it("rejects malformed references and unsupported format versions", () => {
     const valid = encodeArchive({
       classes: ["NSObject"],
