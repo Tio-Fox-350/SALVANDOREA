@@ -90,6 +90,34 @@ export const resolveAppBundleExecutable = async (
   );
 };
 
+/**
+ * Whether a directory path appears to be a macOS or iOS application bundle.
+ */
+export const isAppBundlePath = async (path: string): Promise<boolean> => {
+  try {
+    const layout = await presentLayout(path);
+    if (layout !== undefined) return true;
+    const wrapped = await wrappedBundle(path);
+    if (wrapped !== undefined && (await presentLayout(wrapped)) !== undefined)
+      return true;
+    const canonical = await realpath(path);
+    if (canonical !== path) {
+      const canonicalLayout = await presentLayout(canonical);
+      if (canonicalLayout !== undefined) return true;
+      const canonicalWrapped = await wrappedBundle(canonical);
+      if (
+        canonicalWrapped !== undefined &&
+        (await presentLayout(canonicalWrapped)) !== undefined
+      )
+        return true;
+    }
+    return false;
+  } catch (cause: unknown) {
+    if (cause instanceof BinaryTargetError) return true;
+    return false;
+  }
+};
+
 const presentLayout = async (
   bundle: string,
 ): Promise<BundleLayout | undefined> => {
