@@ -607,12 +607,26 @@ export const nativeFunctionSummarySchema = z.strictObject({
     address: z.string(),
   }),
   pseudocode: z.strictObject({
-    available: z.boolean(),
-    code_units: z.number().int().nonnegative(),
+    available: z
+      .boolean()
+      .describe(
+        "Provider facet_availability for pseudocode when declared; otherwise whether decompiled text is present. The flag is authoritative over raw length.",
+      ),
+    code_units: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        "Pseudocode length in UTF-16 code units, the unit inspect_analysis_view pages pseudocode by.",
+      ),
   }),
   value_flow: z.strictObject({
     available: z.boolean(),
-    truncated: z.boolean(),
+    truncated: z
+      .boolean()
+      .describe(
+        "True only when value-flow is available and the provider truncated it; false when value-flow is unavailable (see available).",
+      ),
   }),
   counts: z.strictObject({
     assembly: z.number().int().nonnegative(),
