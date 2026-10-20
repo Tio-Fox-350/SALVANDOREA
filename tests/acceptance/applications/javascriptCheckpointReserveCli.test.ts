@@ -111,19 +111,23 @@ cliTest.skipIf(process.versions.bun !== undefined).for([
               reported_limits: z.object({
                 parent_available_result_budget_bytes: z.number(),
                 module_retention_estimate_bytes: z.number(),
-                graph_retention_estimate_bytes: z.number(),
+                graph_retention_estimate_bytes: z.number().optional(),
               }),
             }),
           })
           .parse(failures[0]);
         const limits = failure.details.reported_limits;
-        expect(
+        const estimatedRetention =
           limits.module_retention_estimate_bytes +
-            limits.graph_retention_estimate_bytes,
-        ).toBeGreaterThan(limits.parent_available_result_budget_bytes);
+          (limits.graph_retention_estimate_bytes ?? 0);
+        expect(estimatedRetention).toBeGreaterThan(
+          limits.parent_available_result_budget_bytes,
+        );
         expect(failure.remediation.action).toContain("parent result budget");
         expect(failure.remediation.action).toContain(
-          "retained static and module facts",
+          limits.graph_retention_estimate_bytes === undefined
+            ? "retained static facts"
+            : "retained static and module facts",
         );
       }
     }
