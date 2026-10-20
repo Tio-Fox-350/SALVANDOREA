@@ -40,8 +40,10 @@ export const execFileBoundedOutput = (
             chunk.subarray(0, headCount),
           ]);
         const rest = chunk.subarray(headCount);
-        if (rest.length > 0 && tailLimit > 0)
-          stream.tail = Buffer.concat([stream.tail, rest]).subarray(-tailLimit);
+        if (rest.length > 0 && tailLimit > 0) {
+          const tailChunk = rest.length >= tailLimit ? rest.subarray(-tailLimit) : rest;
+          stream.tail = Buffer.concat([stream.tail, tailChunk]).subarray(-tailLimit);
+        }
         if (stream.total > options.limit) outputTruncated = true;
       };
     child.stdout.on("data", capture(stdout));
