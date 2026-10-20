@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { nativeValueTraceInputSchema } from "../domain/native/nativeValueTrace.js";
-import { analysisDetailSummaryDefaultSchema } from "./analysisDetail.js";
 const traceLiteralInputSchema = z.strictObject({
   query: z.string().min(1),
   case_sensitive: z.boolean().default(false),
@@ -51,9 +50,9 @@ export const enhancedInputSchemas = {
   }),
   find_xrefs_to_name: z.strictObject({ name: z.string() }),
   binary_overview: z.strictObject({}),
+  // Provider input only; MCP delivery detail is owned by the analyze_function tool contract.
   analyze_function: z.strictObject({
     procedure: z.string().describe("A procedure name or address"),
-    detail: analysisDetailSummaryDefaultSchema,
   }),
   inspect_native_api: z.strictObject({
     procedure: z.string().describe("A procedure name or address"),

@@ -1,4 +1,5 @@
 import { jsonObjectSchema } from "../domain/jsonValue.js";
+import { analysisDetailSummaryDefaultSchema } from "./analysisDetail.js";
 import { enhancedInputSchemas } from "./enhancedInputs.js";
 import { TOOL_EXAMPLE_OVERRIDES } from "./toolContractExamples.js";
 import type { ToolContract } from "./toolContractTypes.js";
@@ -8,11 +9,23 @@ import { requireOutputSchema } from "./toolOutputSchemaPrimitives.js";
 
 type FunctionWorkflowName = "analyze_function" | "inspect_native_api";
 
+/**
+ * MCP inputs: the provider input plus analyze_function's delivery detail, which
+ * the tool handler separates before any provider call. Composed workflows such
+ * as inspect_native_api build provider inputs from enhancedInputSchemas alone.
+ */
+export const functionWorkflowInputSchemas = {
+  analyze_function: enhancedInputSchemas.analyze_function.extend({
+    detail: analysisDetailSummaryDefaultSchema,
+  }),
+  inspect_native_api: enhancedInputSchemas.inspect_native_api,
+} as const;
+
 const functionWorkflow = <Name extends FunctionWorkflowName>(
   name: Name,
   description: string,
 ) => {
-  const inputSchema = enhancedInputSchemas[name];
+  const inputSchema = functionWorkflowInputSchemas[name];
   const outputSchema = requireOutputSchema(enhancedOutputSchemas, name);
   return {
     name,

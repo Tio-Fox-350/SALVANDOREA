@@ -115,8 +115,68 @@ it("projects a compact analyze_function summary that validates and retains the d
       procedure: { address: "0x401000" },
       pseudocode: { available: true },
       value_flow: { available: true },
-      counts: { assembly: 2 },
+      facet_availability: { references: { available: true } },
+      counts: { assembly: 2, incoming_references: 0 },
     },
+  });
+});
+
+it("keeps provider-unavailable facets unknown in the analyze_function summary", () => {
+  // A Kuna-style dossier: empty rows with explicit unavailability for several facets.
+  const dossier = functionDossierSchema.parse(ghidraFunctionDossier());
+  const unsupported = {
+    ...dossier,
+    comments: [],
+    incoming_references: [],
+    outgoing_references: [],
+    basic_blocks: [],
+    facet_availability: {
+      ...dossier.facet_availability,
+      comments: {
+        available: false,
+        reason: "Kuna exports no analyst comments.",
+      },
+      references: {
+        available: false,
+        reason: "This provider does not report typed references.",
+      },
+      cfg: { available: false, reason: "Kuna exports no basic blocks." },
+    },
+  };
+  const summary = projectAnalysisView(nativeParent(unsupported), {
+    kind: "summary",
+  });
+  if (!summary.ok) throw summary.error;
+  const validated = analysisViewResultSchema.parse(summary.value);
+  expect(validated).toMatchObject({
+    kind: "summary",
+    summary: {
+      facet_availability: unsupported.facet_availability,
+      counts: {
+        comments: null,
+        incoming_references: null,
+        outgoing_references: null,
+        basic_blocks: null,
+        // Declared-available facets keep their observed counts.
+        assembly: 2,
+        callers: 0,
+        referenced_strings: dossier.referenced_strings.length,
+      },
+    },
+    unknowns: expect.arrayContaining([
+      "comments unavailable: Kuna exports no analyst comments.",
+      "references unavailable: This provider does not report typed references.",
+      "cfg unavailable: Kuna exports no basic blocks.",
+    ]),
+  });
+  // A dossier that declares nothing reports null availability and plain counts.
+  const { facet_availability: _declared, ...undeclared } = dossier;
+  const silent = projectAnalysisView(nativeParent(undeclared), {
+    kind: "summary",
+  });
+  if (!silent.ok) throw silent.error;
+  expect(silent.value).toMatchObject({
+    summary: { facet_availability: null, counts: { comments: 0 } },
   });
 });
 

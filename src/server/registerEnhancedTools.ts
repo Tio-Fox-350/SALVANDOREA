@@ -166,9 +166,10 @@ export const registerEnhancedTools = (
   server.registerTool(
     analyzeFunction.name,
     toolRegistrationOptions(analyzeFunction),
-    (input, context) =>
-      executeEnhancedTool(registration, analyzeFunction, {
-        validatedCall: { name: "analyze_function", input },
+    ({ detail, ...providerInput }, context) =>
+      executeFunctionTool(registration, analyzeFunction, {
+        detail,
+        parameters: jsonParameters(providerInput),
         context,
       }),
   );
@@ -235,11 +236,6 @@ const executeEnhancedTool = async (
       });
       const parsedInput = validatedCall.input;
       const parameters = jsonParameters(parsedInput);
-      if (name === "analyze_function")
-        return executeFunctionTool(admittedAnalysis, registration, contract, {
-          context,
-          parameters,
-        });
       const analysis: AnalysisOperationPort = {
         execute: (operation, operationParameters, executionOptions) =>
           admittedAnalysis.execute(operation, operationParameters, {
@@ -313,29 +309,62 @@ const executeEnhancedTool = async (
     : registration.delivery.toCallToolResult(admitted, contract);
 };
 
+/**
+ * analyze_function owns its MCP delivery: detail selects the response shape
+ * and never reaches the provider, so parameters hold the provider input only.
+ */
 const executeFunctionTool = async (
+  registration: EnhancedToolRegistration & {
+    readonly delivery: ToolResultDelivery;
+  },
+  contract: ToolContract,
+  request: {
+    readonly detail: "complete" | "summary";
+    readonly parameters: Readonly<Record<string, JsonValue>>;
+    readonly context: ServerContext;
+  },
+): Promise<CallToolResult> => {
+  const { detail, context } = request;
+  // Fail before analysis when a retained summary cannot keep its complete source.
+  if (detail === "summary") {
+    const ready = requireAnalysisViewRetention("analyze_function", {
+      recordEvidence: registration.recordEvidence,
+      evidenceById: registration.evidenceById,
+    });
+    if (!ready.ok)
+      return registration.delivery.toCallToolResult(ready, contract);
+  }
+  const admitted = await registration.withAdmittedAnalysis(
+    "analyze_function",
+    context.mcpReq.signal,
+    (analysis) =>
+      deliverFunctionAnalysis(analysis, registration, contract, request),
+  );
+  return admitted.ok
+    ? admitted.value
+    : registration.delivery.toCallToolResult(admitted, contract);
+};
+
+const deliverFunctionAnalysis = async (
   analysis: AnalysisOperationPort,
   registration: EnhancedToolRegistration & {
     readonly delivery: ToolResultDelivery;
   },
   contract: ToolContract,
   request: {
-    readonly context: ServerContext;
+    readonly detail: "complete" | "summary";
     readonly parameters: Readonly<Record<string, JsonValue>>;
+    readonly context: ServerContext;
   },
 ): Promise<CallToolResult> => {
-  const { context, parameters } = request;
+  const { detail, parameters, context } = request;
   const progress = mcpProgressReporter(context);
-  const retention = {
-    recordEvidence: registration.recordEvidence,
-    evidenceById: registration.evidenceById,
-  };
-  // Fail before analysis when a retained summary cannot keep its complete source.
-  if (parameters.detail === "summary") {
-    const ready = requireAnalysisViewRetention("analyze_function", retention);
-    if (!ready.ok)
-      return registration.delivery.toCallToolResult(ready, contract);
-  }
+  await progress.report({
+    phase: "analyze_function",
+    completed: 0,
+    total: 1,
+    message: "started",
+  });
   const result = await logToolExecution(
     registration.logger,
     "analyze_function",
@@ -359,8 +388,11 @@ const executeFunctionTool = async (
   });
   if (!result.ok)
     return registration.delivery.toCallToolResult(result, contract);
-  if (parameters.detail === "summary") {
-    const summary = summarizeRetainedAnalysis(result.value, retention);
+  if (detail === "summary") {
+    const summary = summarizeRetainedAnalysis(result.value, {
+      recordEvidence: registration.recordEvidence,
+      evidenceById: registration.evidenceById,
+    });
     if (!summary.ok)
       return registration.delivery.toCallToolResult(summary, contract);
     return registration.delivery.toEvidenceToolResult(

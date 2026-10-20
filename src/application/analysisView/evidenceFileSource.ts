@@ -5,11 +5,13 @@ import type { ArtifactResourceScope } from "../../artifacts/ArtifactResourceScop
 import type { AnalysisError } from "../../domain/analysisErrorBase.js";
 import {
   AnalysisCancelledError,
+  AnalysisInputError,
   AnalysisResourceConstraintError,
 } from "../../domain/analysisErrorCore.js";
 import { INSPECT_ANALYSIS_VIEW_OPERATION } from "../../domain/analysisView/analysisViewErrors.js";
 import { err, ok, type Result } from "../../domain/result.js";
 import { parseEvidence, type Evidence } from "../../domain/evidence.js";
+import { parseEvidenceBundle } from "../../domain/evidenceBundle.js";
 import {
   EvidenceFileError,
   EvidenceIntegrityError,
@@ -72,10 +74,77 @@ export const requireAuthenticationHeadroom = (
   );
 };
 
-/** Read and authenticate one Evidence file under the request's cancellation and resource scope. */
+/** A bundle file carries its records array; one Evidence record carries none. */
+const isBundleShaped = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  Array.isArray(Reflect.get(value, "records"));
+
+const selectionError = (message: string): AnalysisInputError =>
+  new AnalysisInputError(
+    INSPECT_ANALYSIS_VIEW_OPERATION,
+    { userMessage: message },
+    [
+      {
+        path: ["source", "evidence_id"],
+        reason: "invalid_value",
+        message,
+      },
+    ],
+  );
+
+/** Listed identities stay bounded so a large bundle cannot grow the error itself. */
+const LISTED_RECORD_IDS = 20;
+
+/** Select the one record a view projects from an authenticated bundle. */
+const selectBundleRecord = (
+  records: readonly Evidence[],
+  path: string,
+  evidenceId: string | undefined,
+): Result<Evidence, AnalysisError> => {
+  if (evidenceId !== undefined) {
+    const selected = records.find(
+      (record) => record.evidence_id === evidenceId,
+    );
+    return selected === undefined
+      ? err(
+          selectionError(
+            `Evidence bundle ${path} holds no record ${evidenceId}. It holds ${listRecordIds(records)}.`,
+          ),
+        )
+      : ok(selected);
+  }
+  const [only, ...rest] = records;
+  if (only === undefined)
+    return err(selectionError(`Evidence bundle ${path} holds no records.`));
+  if (rest.length > 0)
+    return err(
+      selectionError(
+        `Evidence bundle ${path} holds ${String(records.length)} records; select one with source.evidence_id. It holds ${listRecordIds(records)}.`,
+      ),
+    );
+  return ok(only);
+};
+
+const listRecordIds = (records: readonly Evidence[]): string => {
+  const listed = records
+    .slice(0, LISTED_RECORD_IDS)
+    .map((record) => `${record.evidence_id} (${record.operation})`)
+    .join(", ");
+  const omitted = records.length - LISTED_RECORD_IDS;
+  return omitted > 0 ? `${listed} and ${String(omitted)} more` : listed;
+};
+
+/**
+ * Read and authenticate one Evidence file under the request's cancellation and
+ * resource scope. An Evidence bundle file, as --evidence_output and
+ * export_evidence_bundle write, projects the selected record or its only one.
+ */
 export const readEvidenceFileSource = async (
   path: string,
   options: EvidenceFileReadOptions = {},
+  evidenceId?: string,
 ): Promise<Result<Evidence, AnalysisError>> => {
   const { signal, resources } = options;
   if (signal?.aborted)
@@ -100,8 +169,11 @@ export const readEvidenceFileSource = async (
     return err(new AnalysisCancelledError(INSPECT_ANALYSIS_VIEW_OPERATION));
   const headroom = requireAuthenticationHeadroom(loaded.value, path);
   if (!headroom.ok) return headroom;
+  const bundle = isBundleShaped(loaded.value);
   try {
-    return ok(parseEvidence(loaded.value));
+    if (!bundle) return ok(parseEvidence(loaded.value));
+    const records = parseEvidenceBundle(loaded.value).records;
+    return selectBundleRecord(records, path, evidenceId);
   } catch (cause: unknown) {
     if (cause instanceof z.ZodError)
       return err(
@@ -109,8 +181,9 @@ export const readEvidenceFileSource = async (
           path,
           cause,
           contentIssues: projectInputIssues(cause.issues, loaded.value),
-          userMessage:
-            "The selected file does not contain valid Evidence. Repair or recreate the file and try again.",
+          userMessage: bundle
+            ? "The selected file does not contain a valid Evidence bundle. Supply an unmodified bundle written by --evidence_output or export_evidence_bundle."
+            : "The selected file does not contain valid Evidence. Repair or recreate the file and try again.",
         }),
       );
     if (cause instanceof TypeError)

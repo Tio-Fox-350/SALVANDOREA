@@ -2,7 +2,7 @@ import type {
   AnalysisOperationPort,
   ExecutionOptions,
 } from "./AnalysisProvider.js";
-import { toolContract } from "../contracts/toolContracts.js";
+import { enhancedInputSchemas } from "../contracts/enhancedInputs.js";
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
 import { createEvidence } from "../domain/evidence.js";
 import { parseFunctionDossier } from "../domain/hopperValues.js";
@@ -10,15 +10,18 @@ import { jsonObjectSchema, type JsonValue } from "../domain/jsonValue.js";
 import { err, ok } from "../domain/result.js";
 import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js";
 
-/** Preserve the provider's observations when presenting a validated function dossier. */
+/**
+ * Preserve the provider's observations when presenting a validated function
+ * dossier. Parameters are the provider input only: adapters separate delivery
+ * options such as MCP detail before calling.
+ */
 export const executeFunctionAnalysisEvidence = async (
   analysis: AnalysisOperationPort,
   parameters: Readonly<Record<string, JsonValue>>,
   target: BinaryTarget | undefined,
   options?: ExecutionOptions,
 ) => {
-  const input =
-    toolContract("analyze_function").inputSchema.safeParse(parameters);
+  const input = enhancedInputSchemas.analyze_function.safeParse(parameters);
   if (!input.success)
     return err(
       analysisInputErrorFromIssues(
@@ -28,9 +31,7 @@ export const executeFunctionAnalysisEvidence = async (
         { cause: input.error },
       ),
     );
-  // Delivery detail selects a response shape; it never reaches the provider or Evidence identity.
-  const { detail: _detail, ...delivered } = input.data;
-  const arguments_ = jsonObjectSchema.parse(delivered);
+  const arguments_ = jsonObjectSchema.parse(input.data);
   const execution = await analysis.execute(
     "analyze_function",
     arguments_,

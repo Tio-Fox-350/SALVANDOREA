@@ -89,10 +89,44 @@ const nativeRows = (
   }[facet];
 };
 
+type FacetAvailability = NonNullable<FunctionDossier["facet_availability"]>;
+type FacetAvailabilityKey = keyof FacetAvailability;
+
+/** Row facets whose provider availability is declared under another key. */
+const facetAvailabilityKeys: Readonly<
+  Partial<Record<string, FacetAvailabilityKey>>
+> = {
+  incoming_references: "references",
+  outgoing_references: "references",
+  referenced_strings: "strings_names",
+  referenced_names: "strings_names",
+  basic_blocks: "cfg",
+};
+
+const facetAvailability = (
+  dossier: FunctionDossier,
+  facet: string,
+): FacetAvailability[FacetAvailabilityKey] | undefined =>
+  dossier.facet_availability?.[
+    facetAvailabilityKeys[facet] ?? (facet as FacetAvailabilityKey)
+  ];
+
+/** Reasons the provider declared row facets unavailable; empty rows there are not observations. */
+const unavailableFacetUnknowns = (dossier: FunctionDossier): string[] => {
+  const availability = dossier.facet_availability;
+  if (availability === undefined) return [];
+  return Object.entries(availability).flatMap(([facet, status]) =>
+    status.available ? [] : [`${facet} unavailable: ${status.reason}`],
+  );
+};
+
 /** Compact dossier summary: identity, pseudocode size, facet counts and value-flow availability. */
 const summarizeDossier = (dossier: FunctionDossier) => {
   const sourceFlow = dossier.native_value_flow;
   const flow = sourceFlow?.available ? sourceFlow : undefined;
+  // A count is unknown, not zero, when the provider declared its facet unavailable.
+  const count = (facet: string, rows: readonly unknown[]): number | null =>
+    facetAvailability(dossier, facet)?.available === false ? null : rows.length;
   return {
     procedure: {
       name: dossier.procedure.name,
@@ -108,17 +142,27 @@ const summarizeDossier = (dossier: FunctionDossier) => {
       available: flow !== undefined,
       truncated: flow?.truncated ?? false,
     },
+    facet_availability: dossier.facet_availability ?? null,
     counts: {
-      assembly: dossier.assembly.length,
-      basic_blocks: dossier.basic_blocks.length,
-      comments: dossier.comments.length,
-      callers: dossier.callers.length,
-      callees: dossier.callees.length,
-      incoming_references: dossier.incoming_references.length,
-      outgoing_references: dossier.outgoing_references.length,
+      assembly: count("assembly", dossier.assembly),
+      basic_blocks: count("basic_blocks", dossier.basic_blocks),
+      comments: count("comments", dossier.comments),
+      callers: count("callers", dossier.callers),
+      callees: count("callees", dossier.callees),
+      incoming_references: count(
+        "incoming_references",
+        dossier.incoming_references,
+      ),
+      outgoing_references: count(
+        "outgoing_references",
+        dossier.outgoing_references,
+      ),
       unresolved_calls: (dossier.unresolved_calls ?? []).length,
-      referenced_strings: dossier.referenced_strings.length,
-      referenced_names: dossier.referenced_names.length,
+      referenced_strings: count(
+        "referenced_strings",
+        dossier.referenced_strings,
+      ),
+      referenced_names: count("referenced_names", dossier.referenced_names),
       value_flow_operations: flow?.operations.length ?? 0,
       value_flow_def_use: flow?.def_use.length ?? 0,
       value_flow_effects: flow?.effects.length ?? 0,
@@ -128,6 +172,22 @@ const summarizeDossier = (dossier: FunctionDossier) => {
     limitation_count: dossier.limitations.length,
   };
 };
+
+const summaryView = (
+  view: Extract<AnalysisViewRequest, { readonly kind: "summary" }>,
+  dossier: FunctionDossier,
+  common: ReturnType<typeof parentFields>,
+): UnsignedAnalysisView => ({
+  kind: "summary",
+  view,
+  summary: summarizeDossier(dossier),
+  coverage: completeWithinViewCoverage(1, 1),
+  ...common,
+  unknowns: uniqueSorted([
+    ...common.unknowns,
+    ...unavailableFacetUnknowns(dossier),
+  ]),
+});
 
 /** Project bounded native function facets from complete retained Evidence without reanalysis. */
 export const projectNativeFunctionView = (
@@ -152,28 +212,8 @@ export const projectNativeFunctionView = (
       ]),
     );
   const common = parentFields(parent, dossier, artifact);
-  if (view.kind === "summary")
-    return ok({
-      kind: "summary",
-      view,
-      summary: summarizeDossier(dossier),
-      coverage: completeWithinViewCoverage(1, 1),
-      ...common,
-    });
-  const availabilityKeys: Readonly<Record<string, string>> = {
-    incoming_references: "references",
-    outgoing_references: "references",
-    referenced_strings: "strings_names",
-    referenced_names: "strings_names",
-    basic_blocks: "cfg",
-  };
-  const availabilityKey = availabilityKeys[view.facet] ?? view.facet;
-  const availability =
-    dossier.facet_availability?.[
-      availabilityKey as keyof NonNullable<
-        FunctionDossier["facet_availability"]
-      >
-    ];
+  if (view.kind === "summary") return ok(summaryView(view, dossier, common));
+  const availability = facetAvailability(dossier, view.facet);
   if (availability?.available === false)
     common.unknowns = uniqueSorted([...common.unknowns, availability.reason]);
   const singleton = (item: unknown): UnsignedAnalysisView => ({

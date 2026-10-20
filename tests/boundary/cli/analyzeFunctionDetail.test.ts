@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 
+import { inspectAnalysisViewWithFiles } from "../../../src/application/analysisView/AnalysisViewService.js";
 import { registerCoreBinaryCommands } from "../../../src/cli/coreBinaryCommands.js";
 import type { CliInstance } from "../../../src/cli/types.js";
 import { CLI_COMMANDS } from "../../../src/cliCommandNames.js";
@@ -72,7 +73,7 @@ it("rejects summary delivery without --evidence_output before any analysis", asy
   expect(JSON.stringify(out)).toContain("evidence_output");
 });
 
-it("summary delivery returns the compact view and writes the complete bundle", async () => {
+it("summary delivery returns the compact view and writes a bundle inspect-analysis-view pages", async () => {
   const h = harness();
   const directory = await createTestTempDirectory("rea-fn-detail-");
   const destination = join(directory, "complete.json");
@@ -92,4 +93,20 @@ it("summary delivery returns the compact view and writes the complete bundle", a
   );
   expect(out.evidence_bundle.bytes).toBeGreaterThan(0);
   expect((await stat(destination)).size).toBeGreaterThan(0);
+  // The saved bundle is the evidence-file source inspect-analysis-view reads back.
+  const parentId = out.summary.normalized_result.parent_evidence_id;
+  const page = await inspectAnalysisViewWithFiles({
+    source: { kind: "evidence-file", path: destination, evidence_id: parentId },
+    view: { kind: "native", facet: "pseudocode", offset: 0, limit: 16 },
+  });
+  if (!page.ok) throw page.error;
+  expect(page.value.parameters).toMatchObject({ parent_evidence_id: parentId });
+  expect(page.value.normalized_result).toMatchObject({
+    kind: "native",
+    item: {
+      text: functionDossierSchema
+        .parse(ghidraFunctionDossier())
+        .pseudocode.slice(0, 16),
+    },
+  });
 });

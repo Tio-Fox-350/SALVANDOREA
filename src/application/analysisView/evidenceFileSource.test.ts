@@ -3,9 +3,13 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { analysisViewCaptureEvidence } from "../../../tests/fixtures/analysisView.js";
+import {
+  analysisViewCaptureEvidence,
+  analysisViewNativeEvidence,
+} from "../../../tests/fixtures/analysisView.js";
 import { createTestTempDirectory } from "../../../tests/fixtures/temporaryDirectory.js";
 import { ArtifactResourceScope } from "../../artifacts/ArtifactResourceScope.js";
+import { createEvidenceBundle } from "../../domain/evidenceBundle.js";
 import {
   estimateJsonValueBytes,
   readEvidenceFileSource,
@@ -60,5 +64,63 @@ describe("evidence-file source", () => {
     await resources.close();
     if (!read.ok) throw read.error;
     expect(read.value).toEqual(JSON.parse(JSON.stringify(parent)));
+  });
+
+  it("projects the selected or only record of an Evidence bundle file", async () => {
+    const root = await createTestTempDirectory("rea-evidence-bundle-source-");
+    const native = analysisViewNativeEvidence();
+    const capture = analysisViewCaptureEvidence();
+    const single = join(root, "single.json");
+    await writeFile(single, JSON.stringify(createEvidenceBundle([native])));
+    const only = await readEvidenceFileSource(single);
+    if (!only.ok) throw only.error;
+    expect(only.value.evidence_id).toBe(native.evidence_id);
+
+    const several = join(root, "several.json");
+    await writeFile(
+      several,
+      JSON.stringify(createEvidenceBundle([native, capture])),
+    );
+    const selected = await readEvidenceFileSource(
+      several,
+      {},
+      capture.evidence_id,
+    );
+    if (!selected.ok) throw selected.error;
+    expect(selected.value.evidence_id).toBe(capture.evidence_id);
+
+    // Ambiguity and a missing selection are input errors that name the records held.
+    const ambiguous = await readEvidenceFileSource(several);
+    expect(ambiguous).toMatchObject({
+      ok: false,
+      error: {
+        _tag: "AnalysisInputError",
+        issues: [{ path: ["source", "evidence_id"], reason: "invalid_value" }],
+      },
+    });
+    if (ambiguous.ok) throw new Error("Expected an ambiguous bundle");
+    expect(ambiguous.error.userMessage).toContain(native.evidence_id);
+    expect(ambiguous.error.userMessage).toContain("analyze_function");
+    const absent = "ev_" + "f".repeat(64);
+    const missing = await readEvidenceFileSource(several, {}, absent);
+    expect(missing).toMatchObject({
+      ok: false,
+      error: {
+        _tag: "AnalysisInputError",
+        userMessage: expect.stringContaining(absent),
+      },
+    });
+
+    // A bundle-shaped file that is not a valid bundle is a wrong-kind file, not Evidence.
+    const invalid = join(root, "invalid.json");
+    await writeFile(invalid, JSON.stringify({ records: [{ hello: 1 }] }));
+    expect(await readEvidenceFileSource(invalid)).toMatchObject({
+      ok: false,
+      error: {
+        _tag: "EvidenceFileError",
+        reason: "wrong-kind",
+        userMessage: expect.stringContaining("Evidence bundle"),
+      },
+    });
   });
 });

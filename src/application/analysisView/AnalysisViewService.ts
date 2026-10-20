@@ -89,7 +89,11 @@ export const inspectAnalysisViewValidatedWithFiles = async (
 ): Promise<Result<Evidence, AnalysisError>> => {
   if (input.source.kind !== "evidence-file")
     return inspectAnalysisViewValidated(input, lookup);
-  const loaded = await readEvidenceFileSource(input.source.path, options);
+  const loaded = await readEvidenceFileSource(
+    input.source.path,
+    options,
+    input.source.evidence_id,
+  );
   // Authentication and projection are synchronous; yield so a pending abort is dispatched before each check.
   const cancelled = async (): Promise<boolean> => {
     await setImmediate();
@@ -344,7 +348,12 @@ const createAnalysisViewEvidence = (
         : "derived",
     authority: parent.authority,
     limitations: result.limitations,
-    ...(result.kind === "native" && parent.relationship_coverage !== null
+    // Function facets and the function summary both report caller/callee facts,
+    // so partial or unknown discovery stays with them instead of reading as complete.
+    ...((result.kind === "native" ||
+      (result.kind === "summary" &&
+        result.parent_operation === "analyze_function")) &&
+    parent.relationship_coverage !== null
       ? { relationshipCoverage: parent.relationship_coverage }
       : {}),
     locations: [

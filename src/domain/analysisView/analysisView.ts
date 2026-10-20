@@ -73,7 +73,10 @@ import { jsonObjectSchema, jsonValueSchema } from "../jsonValue.js";
 import { err, ok, type Result } from "../result.js";
 import type { AnalysisError } from "../analysisErrorBase.js";
 import { safeParseOwnedBinaryLayout } from "../native/binaryLayout.js";
-import { functionDossierSchema } from "../hopperValues.js";
+import {
+  functionDossierSchema,
+  functionFacetAvailabilitySchema,
+} from "../hopperValues.js";
 import {
   artifactGraphManifestSchema,
   artifactInventoryCoverageSchema,
@@ -319,8 +322,13 @@ export const analysisViewSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("evidence-file"),
     path: absoluteLocalPathStringSchema.describe(
-      "Absolute local path of one completed Evidence JSON file. REA reads and authenticates it, then projects it like retained Evidence, so large captures are not charged as inline input.",
+      "Absolute local path of one completed Evidence JSON file, or of an Evidence bundle written by --evidence_output or export_evidence_bundle. REA reads and authenticates it, then projects it like retained Evidence, so large captures are not charged as inline input.",
     ),
+    evidence_id: prefixedDigestSchema("ev")
+      .exactOptional()
+      .describe(
+        "The record to project when the file is an Evidence bundle, such as a summary's normalized_result.parent_evidence_id. A bundle holding exactly one record needs no selection.",
+      ),
   }),
 ]);
 
@@ -600,6 +608,16 @@ export const nativeFunctionMatchingSummaryViewResultSchema = z.strictObject({
   summary: nativeFunctionMatchingViewContextSchema,
 });
 
+/** Rows observed for one facet, or null when the provider declared that facet unavailable. */
+const declaredFacetCountSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .nullable()
+  .describe(
+    "Observed rows; null when facet_availability declares the facet unavailable, so no rows is not evidence of none.",
+  );
+
 /** Compact analyze_function dossier; the complete dossier stays retained for facet paging. */
 export const nativeFunctionSummarySchema = z.strictObject({
   procedure: z.strictObject({
@@ -628,17 +646,22 @@ export const nativeFunctionSummarySchema = z.strictObject({
         "True only when value-flow is available and the provider truncated it; false when value-flow is unavailable (see available).",
       ),
   }),
+  facet_availability: functionFacetAvailabilitySchema
+    .nullable()
+    .describe(
+      "The provider's declared availability per facet, or null when it declared none. Unavailable facets name their reason here and in unknowns.",
+    ),
   counts: z.strictObject({
-    assembly: z.number().int().nonnegative(),
-    basic_blocks: z.number().int().nonnegative(),
-    comments: z.number().int().nonnegative(),
-    callers: z.number().int().nonnegative(),
-    callees: z.number().int().nonnegative(),
-    incoming_references: z.number().int().nonnegative(),
-    outgoing_references: z.number().int().nonnegative(),
+    assembly: declaredFacetCountSchema,
+    basic_blocks: declaredFacetCountSchema,
+    comments: declaredFacetCountSchema,
+    callers: declaredFacetCountSchema,
+    callees: declaredFacetCountSchema,
+    incoming_references: declaredFacetCountSchema,
+    outgoing_references: declaredFacetCountSchema,
     unresolved_calls: z.number().int().nonnegative(),
-    referenced_strings: z.number().int().nonnegative(),
-    referenced_names: z.number().int().nonnegative(),
+    referenced_strings: declaredFacetCountSchema,
+    referenced_names: declaredFacetCountSchema,
     value_flow_operations: z.number().int().nonnegative(),
     value_flow_def_use: z.number().int().nonnegative(),
     value_flow_effects: z.number().int().nonnegative(),

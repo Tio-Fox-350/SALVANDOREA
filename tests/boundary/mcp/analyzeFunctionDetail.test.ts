@@ -8,13 +8,21 @@ import { createToolResultDelivery } from "../../../src/server/toolResult.js";
 import { withAdmittedAnalysis } from "../../../src/server/analysisAdmission.js";
 import type { AnalysisOperationPort } from "../../../src/application/AnalysisProvider.js";
 import { parseEvidence, type Evidence } from "../../../src/domain/evidence.js";
+import type { JsonValue } from "../../../src/domain/jsonValue.js";
 import { ok } from "../../../src/domain/result.js";
 import { functionDossierSchema } from "../../../src/domain/hopperValues.js";
 import { ghidraFunctionDossier } from "../../../src/domain/ghidraValues.fixture.js";
+import { parseGhidraFunctionInput } from "../../../src/ghidra/GhidraFunctionValues.js";
 
 const dossier = functionDossierSchema.parse(ghidraFunctionDossier());
+const partialCallees = {
+  status: "partial" as const,
+  limitations: ["Callees: fixture read limit"],
+  limited_directions: ["callees"] as const,
+};
 
-// A fixed provider that returns the fixture dossier for any analyze_function call.
+// A fixed provider that returns the fixture dossier for any analyze_function
+// call, after validating the request exactly as the production Ghidra client does.
 const connect = async (retain = true) => {
   const ledger = new Map<string, Evidence>();
   const record = (evidence: Evidence) => {
@@ -23,8 +31,12 @@ const connect = async (retain = true) => {
   };
   const lookup = (id: string) => ledger.get(id);
   const execute = vi.fn(
-    async (_operation: string, _parameters: Record<string, unknown>) =>
-      ok({
+    async (operation: string, parameters: Record<string, JsonValue>) => {
+      if (operation !== "analyze_function")
+        throw new Error(`Unexpected operation: ${operation}`);
+      const input = parseGhidraFunctionInput(operation, parameters);
+      if (!input.ok) return input;
+      return ok({
         result: dossier,
         rawResult: null,
         provider: { id: "ghidra", name: "Ghidra", version: "12.1.4" },
@@ -35,7 +47,9 @@ const connect = async (retain = true) => {
           format: "pe" as const,
           sha256: "a".repeat(64),
         },
-      }),
+        relationshipCoverage: partialCallees,
+      });
+    },
   );
   const analysis = { execute } as unknown as AnalysisOperationPort;
   const delivery = createToolResultDelivery(4 * 1024 * 1024);
@@ -88,6 +102,24 @@ it("defaults to a retained summary and strips delivery detail before the provide
   const providerParameters = execute.mock.calls[0]?.[1] ?? {};
   expect(providerParameters).not.toHaveProperty("detail");
   expect(providerParameters).toMatchObject({ procedure: "main" });
+  // Partial caller/callee discovery stays with the summary that reports their counts.
+  expect(evidence.relationship_coverage).toEqual(partialCallees);
+  expect(ledger.get(parentId)?.relationship_coverage).toEqual(partialCallees);
+});
+
+it("composes inspect_native_api from a provider input without delivery detail", async () => {
+  const { client, execute } = await connect();
+  const reply = await client.callTool({
+    name: "inspect_native_api",
+    arguments: { procedure: "main" },
+  });
+  expect(reply.isError, JSON.stringify(reply.content)).not.toBe(true);
+  expect(
+    parseEvidence(reply.structuredContent).normalized_result,
+  ).toMatchObject({ procedure: { name: dossier.procedure.name } });
+  expect(execute.mock.calls.map((call) => call[1])).toEqual([
+    { procedure: "main" },
+  ]);
 });
 
 it("returns the complete dossier inline when detail is complete", async () => {
