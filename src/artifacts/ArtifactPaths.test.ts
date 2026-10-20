@@ -11,6 +11,7 @@ const NOTE =
 
 const annotate = (paths: readonly string[]) => {
   const occurrences = paths.map((logical_path) => ({
+    entry_kind: "file" as const,
     logical_path,
     limitations: [] as string[],
   }));
