@@ -379,6 +379,9 @@ export const createGhidraProviderClient = (input: {
       ...(config.ghidraDisabledAnalyzers === undefined
         ? {}
         : { disabledAnalyzers: config.ghidraDisabledAnalyzers }),
+      ...(config.ghidraDecompileTimeoutSeconds === undefined
+        ? {}
+        : { decompileTimeoutSeconds: config.ghidraDecompileTimeoutSeconds }),
       ...(seeds === undefined ? {} : { analysisSeeds: seeds }),
       platform: installation.platform,
       ...(extensions.length === 0 ? {} : { analysisExtensions: extensions }),
@@ -497,11 +500,7 @@ export const createGhidraProviderClient = (input: {
           targetSha256: target.sha256,
           readSnapshot: client.readTargetSnapshot?.bind(client),
           projectFailure: (operation, failure) =>
-            projectSessionError(
-              operation,
-              failure,
-              config.ghidraStartupTimeoutMs,
-            ),
+            projectSessionError(operation, failure, config),
         })
       : undefined;
   const projectExecution = (
@@ -528,7 +527,7 @@ export const createGhidraProviderClient = (input: {
         projectSessionError(
           operation,
           called.error,
-          config.ghidraStartupTimeoutMs,
+          config,
           lostProviderHealth(),
         ),
       );
@@ -568,12 +567,7 @@ export const createGhidraProviderClient = (input: {
       measured: observed,
       client,
       mapSessionError: (failure) =>
-        projectSessionError(
-          operation,
-          failure,
-          config.ghidraStartupTimeoutMs,
-          lostProviderHealth(),
-        ),
+        projectSessionError(operation, failure, config, lostProviderHealth()),
       nativeAotResult: derived,
       signal,
     });
@@ -610,7 +604,7 @@ export const createGhidraProviderClient = (input: {
             projectSessionError(
               operation,
               started.error,
-              config.ghidraStartupTimeoutMs,
+              config,
               lostProviderHealth(),
             ),
           );
@@ -640,7 +634,7 @@ export const createGhidraProviderClient = (input: {
             projectSessionError(
               operation,
               started.error,
-              config.ghidraStartupTimeoutMs,
+              config,
               lostProviderHealth(),
             ),
           );
@@ -661,7 +655,7 @@ export const createGhidraProviderClient = (input: {
           projectSessionError(
             operation,
             called.error,
-            config.ghidraStartupTimeoutMs,
+            config,
             lostProviderHealth(),
           ),
         );
@@ -693,7 +687,7 @@ export const createGhidraProviderClient = (input: {
                 projectSessionError(
                   operation,
                   started.error,
-                  config.ghidraStartupTimeoutMs,
+                  config,
                   lostProviderHealth(),
                 ),
               );
@@ -842,16 +836,22 @@ const ghidraClientPrerequisites = (
   });
 };
 
+/** Configured deadlines that Ghidra failure projections name. */
+type GhidraProjectionLimits = Pick<
+  AppConfig,
+  "ghidraStartupTimeoutMs" | "ghidraDecompileTimeoutSeconds"
+>;
+
 const projectSessionError = (
   operation: AnalysisOperation,
   failure: GhidraSessionError,
-  startupTimeoutMs: number,
+  limits: GhidraProjectionLimits,
   health?: ProviderOperationHealth,
 ): AnalysisError => {
   const primary = projectPrimarySessionError(
     operation,
     failure,
-    startupTimeoutMs,
+    limits,
     health,
   );
   return failure.cleanupFailure === undefined
@@ -866,9 +866,10 @@ const projectSessionError = (
 const projectPrimarySessionError = (
   operation: AnalysisOperation,
   failure: GhidraSessionError,
-  startupTimeoutMs: number,
+  limits: GhidraProjectionLimits,
   health?: ProviderOperationHealth,
 ): AnalysisError => {
+  const startupTimeoutMs = limits.ghidraStartupTimeoutMs;
   const context = {
     cause: failure,
     diagnostics: failure.diagnostics,
@@ -917,6 +918,24 @@ const projectPrimarySessionError = (
       remediationAction:
         "Call analyze_function (CLI: `rea function`) for the same procedure. It returns assembly, callers, callees, references and basic blocks from the Ghidra listing and records this decompiler failure under facet_availability.pseudocode. Repeating the unchanged decompile request is not expected to succeed.",
     });
+  // A request-level deadline, not a provider failure: the session and every
+  // other operation stay available.
+  if (
+    failure.kind === "remote" &&
+    failure.remoteCode === "decompile_timed_out" &&
+    limits.ghidraDecompileTimeoutSeconds !== undefined
+  )
+    return new AnalysisTimeoutError(
+      operation,
+      limits.ghidraDecompileTimeoutSeconds * 1000,
+      {
+        ...context,
+        userMessage: `${failure.message.trim().replace(/\.$/u, "")}. Only this procedure's decompilation was stopped; the Ghidra session remains usable.`,
+        remediationAction: ghidraDecompileTimeoutRemediation(
+          limits.ghidraDecompileTimeoutSeconds,
+        ),
+      },
+    );
   if (failure.kind === "analysis_timeout")
     return new AnalysisTimeoutError(
       operation,
@@ -1101,6 +1120,10 @@ const projectObservedJvmMemoryFailure = (
     },
   );
 };
+
+/** Name the setting and MCP deadline that bound one native decompile. */
+const ghidraDecompileTimeoutRemediation = (limitSeconds: number): string =>
+  `Call analyze_function (CLI: \`rea function\`) for the same procedure to get its assembly, callers, callees, references and basic blocks without pseudocode. Repeating the unchanged decompile request under the same ${String(limitSeconds)}-second limit is not expected to succeed. To allow a longer decompile, raise REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS in REA's launch environment and restart REA; the limit is read when a Ghidra session starts. Over MCP, the client's tool-call deadline must cover Ghidra startup plus the new limit, or the client cancels the request first and REA closes the Ghidra session.`;
 
 /** Name the settings that change Ghidra's import-and-analysis startup deadline. */
 const ghidraStartupTimeoutGuidance = (timeoutMs: number) => ({

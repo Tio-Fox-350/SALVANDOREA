@@ -81,8 +81,9 @@ const installationHost = (
 const provider = (
   host = installationHost(),
   clientFactory?: GhidraProviderClientFactory,
+  environment: Readonly<Record<string, string>> = {},
 ): GhidraProvider => {
-  const config = parseConfig({ GHIDRA_INSTALL_DIR: INSTALL });
+  const config = parseConfig({ GHIDRA_INSTALL_DIR: INSTALL, ...environment });
   if (!config.ok) throw config.error;
   return new GhidraProvider(
     config.value,
@@ -1340,6 +1341,56 @@ describe("Ghidra decompiler failure projection", () => {
         "facet_availability.pseudocode",
       );
       expect(projected.remediation.action).not.toContain("rea doctor");
+    }
+  });
+
+  it("reports one procedure's decompile limit as a request timeout", async () => {
+    const code = "decompile_timed_out";
+    const message =
+      "Ghidra decompilation of 0x401000 exceeded the 5-second limit set by REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS";
+    const ghidra = provider(
+      installationHost(),
+      () => ({
+        start: () => Promise.resolve(ok(sessionInfo())),
+        callTool: () =>
+          Promise.resolve(
+            err(
+              new GhidraSessionError(
+                "remote",
+                message,
+                { remote_code: code },
+                { remoteCode: code },
+              ),
+            ),
+          ),
+        close: () => Promise.resolve(ok(null)),
+      }),
+      { REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS: "5" },
+    );
+    const client = await createElfClient(ghidra);
+    const result = await client.execute("procedure_pseudo_code", {
+      procedure: "main",
+    });
+    // Not a ProviderAdapterError: BinarySession keeps other Ghidra
+    // operations available after a request-level timeout.
+    expect(result).toMatchObject({
+      ok: false,
+      error: { _tag: "AnalysisTimeoutError", timeoutMs: 5000 },
+    });
+    if (!result.ok) {
+      const projected = projectAnalysisError(result.error);
+      expect(projected).toMatchObject({
+        code: "provider_timeout",
+        retryable: true,
+        message: `${message}. Only this procedure's decompilation was stopped; the Ghidra session remains usable.`,
+        recovery: { kind: "inspect_timeout_state", timeout_ms: 5000 },
+        details: { diagnostics: { remote_code: code } },
+      });
+      const action = projected.remediation.action;
+      expect(action).toContain("analyze_function");
+      expect(action).toContain("REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS");
+      expect(action).toContain("tool-call deadline");
+      expect(action).not.toContain("rea doctor");
     }
   });
 });
