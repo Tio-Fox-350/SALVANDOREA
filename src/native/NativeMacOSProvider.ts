@@ -100,7 +100,10 @@ import {
   type SignatureTargetBinding,
 } from "./SignatureTargetBinding.js";
 import { parseCodeSignature } from "./parsers/codesign.js";
-import { parseDemangledSymbols } from "./parsers/demangle.js";
+import {
+  parseDemangledSymbols,
+  swiftDemangleArguments,
+} from "./parsers/demangle.js";
 import { parseLipoOutput } from "./parsers/lipo.js";
 import {
   parsePlistJson,
@@ -568,19 +571,16 @@ class NativeMacOSClient implements AnalysisClient {
       "demangle_swift",
       "swift-demangle",
       // `--` keeps symbols that begin with `-` from selecting demangler options.
-      ["--compact", "--", ...symbols.data],
+      ["--compact", "--", ...swiftDemangleArguments(symbols.data)],
       { signal },
     );
     if (!capture.ok) return capture;
     const provenance = [invocation(capture.value, this.target.path)];
-    const result = demangleSwiftSchema.parse({
-      symbols: parseDemangledSymbols(symbols.data, capture.value.stdout),
-      provenance,
-      limitations: [],
-    });
+    const parsed = parseDemangledSymbols(symbols.data, capture.value.stdout);
+    const result = demangleSwiftSchema.parse({ ...parsed, provenance });
     return ok({
       result: jsonValueSchema.parse(result),
-      limitations: [],
+      limitations: result.limitations,
       locations: [],
     });
   }

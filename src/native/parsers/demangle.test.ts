@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDemangledSymbols } from "./demangle.js";
+import { parseDemangledSymbols, swiftDemangleArguments } from "./demangle.js";
 import { swiftSymbolsSchema } from "../../contracts/native/nativeToolContracts.js";
 
 describe("parseDemangledSymbols", () => {
   it("returns an empty array when given an empty input list", () => {
     expect(swiftSymbolsSchema.safeParse([]).success).toBe(true);
-    expect(parseDemangledSymbols([], "")).toEqual([]);
-    expect(parseDemangledSymbols([], "\n")).toEqual([]);
+    expect(parseDemangledSymbols([], "").symbols).toEqual([]);
+    expect(parseDemangledSymbols([], "\n").symbols).toEqual([]);
   });
 
   it("rejects demangler output when the input batch is empty", () => {
@@ -19,7 +19,7 @@ describe("parseDemangledSymbols", () => {
   it("parses demangled symbols successfully", () => {
     const inputs = ["$s4main4testyyF"];
     const output = "main.test() -> ()\n";
-    expect(parseDemangledSymbols(inputs, output)).toEqual([
+    expect(parseDemangledSymbols(inputs, output).symbols).toEqual([
       {
         input: "$s4main4testyyF",
         output: "main.test() -> ()",
@@ -31,7 +31,7 @@ describe("parseDemangledSymbols", () => {
   it("identifies unchanged non-Swift symbols", () => {
     const inputs = ["_printf"];
     const output = "_printf\n";
-    expect(parseDemangledSymbols(inputs, output)).toEqual([
+    expect(parseDemangledSymbols(inputs, output).symbols).toEqual([
       {
         input: "_printf",
         output: "_printf",
@@ -53,7 +53,7 @@ describe("parseDemangledSymbols", () => {
       "_Tprintf",
     ];
     expect(
-      parseDemangledSymbols(inputs, `${inputs.join("\n")}\n`).map(
+      parseDemangledSymbols(inputs, `${inputs.join("\n")}\n`).symbols.map(
         ({ status }) => status,
       ),
     ).toEqual([...Array<string>(8).fill("invalid"), "unchanged"]);
@@ -80,7 +80,7 @@ describe("parseDemangledSymbols", () => {
       "main.Foo",
       "main.Foo",
     ].join("\n");
-    expect(parseDemangledSymbols(inputs, `${output}\n`)).toEqual([
+    expect(parseDemangledSymbols(inputs, `${output}\n`).symbols).toEqual([
       { input: "__T0Bogus", output: "_T0Bogus", status: "invalid" },
       { input: "__$sBogus", output: "_$sBogus", status: "invalid" },
       {
@@ -99,7 +99,7 @@ describe("parseDemangledSymbols", () => {
   it("parses mixed batches preserving ordering", () => {
     const inputs = ["$s4main4testyyF", "_printf", "$sInvalidMangle"];
     const output = "main.test() -> ()\n_printf\n$sInvalidMangle\n";
-    expect(parseDemangledSymbols(inputs, output)).toEqual([
+    expect(parseDemangledSymbols(inputs, output).symbols).toEqual([
       {
         input: "$s4main4testyyF",
         output: "main.test() -> ()",
@@ -116,6 +116,37 @@ describe("parseDemangledSymbols", () => {
         status: "invalid",
       },
     ]);
+  });
+
+  it("reports `_`, which swift-demangle skips without a record, apart from the demangled batch", () => {
+    const inputs = ["_", "$s4main3FooV", "_", "_Sa"];
+    expect(swiftDemangleArguments(inputs)).toEqual(["$s4main3FooV", "_Sa"]);
+    expect(parseDemangledSymbols(inputs, "main.Foo\n_Sa\n")).toEqual({
+      symbols: [
+        { input: "_", output: "_", status: "unchanged" },
+        { input: "$s4main3FooV", output: "main.Foo", status: "demangled" },
+        { input: "_", output: "_", status: "unchanged" },
+        { input: "_Sa", output: "_Sa", status: "unchanged" },
+      ],
+      limitations: [expect.stringContaining("skips the symbol `_`")],
+    });
+    expect(swiftDemangleArguments(["_"])).toEqual([]);
+    expect(parseDemangledSymbols(["_"], "")).toEqual({
+      symbols: [{ input: "_", output: "_", status: "unchanged" }],
+      limitations: [expect.stringContaining("skips the symbol `_`")],
+    });
+    expect(
+      parseDemangledSymbols(["$s4main3FooV"], "main.Foo\n").limitations,
+    ).toEqual([]);
+  });
+
+  it("rejects an omitted or unterminated record instead of reporting an empty decoding", () => {
+    expect(() => parseDemangledSymbols(["$s4main3FooV"], "")).toThrow(
+      "swift-demangle output count does not match input",
+    );
+    expect(() => parseDemangledSymbols(["$s4main3FooV"], "main.Foo")).toThrow(
+      "swift-demangle output ended inside a record",
+    );
   });
 
   it("throws TypeError when output count does not match input count", () => {

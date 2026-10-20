@@ -69,6 +69,52 @@ describe.skipIf(process.platform !== "darwin")(
     );
 
     mcpTest(
+      "keeps one ordered outcome per input when swift-demangle skips `_`",
+      async ({ mcp, onTestFinished }) => {
+        const target = join(
+          await createTestTempDirectory("rea-demangle-mcp-"),
+          "tool",
+        );
+        await copyFile("/usr/bin/true", target);
+        const client = await openProductionTarget(mcp, onTestFinished, target);
+        const skipped = { input: "_", output: "_", status: "unchanged" };
+
+        for (const [symbols, expected] of [
+          [["_"], [skipped]],
+          [
+            ["_", "$s4main3FooV", "_Sa"],
+            [
+              skipped,
+              {
+                input: "$s4main3FooV",
+                output: "main.Foo",
+                status: "demangled",
+              },
+              { input: "_Sa", output: "_Sa", status: "unchanged" },
+            ],
+          ],
+        ] as const) {
+          const called = await client.callTool({
+            name: "demangle_swift",
+            arguments: { symbols },
+          });
+          expect(called.isError, JSON.stringify(called.content)).not.toBe(true);
+          const result = demangledSchema.parse(
+            called.structuredContent,
+          ).normalized_result;
+          expect(result.symbols).toEqual(expected);
+          expect(result.limitations).toEqual([
+            expect.stringContaining("skips the symbol `_`"),
+          ]);
+          expect(
+            result.provenance.find(({ tool }) => tool === "swift-demangle")
+              ?.command,
+          ).not.toContain("_");
+        }
+      },
+    );
+
+    mcpTest(
       "reports undecodable symbols with any Swift mangling prefix as invalid",
       async ({ mcp, onTestFinished }) => {
         const target = join(
