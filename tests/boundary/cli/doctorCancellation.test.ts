@@ -97,16 +97,18 @@ setTimeout(() => process.exit(99), 20000);
       const observed = z
         .strictObject({
           pid: z.number().int().positive(),
-          runId: z.string().uuid().optional(),
+          // Ownership tokens are opaque. The JADX probe publishes a UUID; the
+          // Kuna version probe publishes `rea-kuna-version-<uuid>`.
+          runId: z.string().min(1).optional(),
         })
         .parse(JSON.parse(await readFile(ready, "utf8")));
       if (provider === "jadx") {
-        if (observed.runId === undefined)
-          throw new Error("Missing JADX run token");
+        const runId = z.string().uuid().safeParse(observed.runId);
+        if (!runId.success) throw new Error("Missing JADX run token");
         ownership = {
           leaderPid: observed.pid,
           processGroupId: observed.pid,
-          runId: observed.runId,
+          runId: runId.data,
         };
       }
       child.kill(signal);
@@ -123,8 +125,7 @@ setTimeout(() => process.exit(99), 20000);
           state: "empty",
         });
       } else {
-        // Kuna's version probe uses a joined direct execFile child, without a
-        // detached run-token group. Do not invent a group owner from its PID.
+        // Do not invent a group owner from the probe PID.
         expect(() => process.kill(observed.pid, 0)).toThrowError(
           expect.objectContaining({ code: "ESRCH" }),
         );
