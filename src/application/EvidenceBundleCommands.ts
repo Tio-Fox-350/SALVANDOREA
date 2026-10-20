@@ -41,7 +41,7 @@ export const exportEvidenceBundleCommand = async (
   const written = await writeEvidenceBundle(
     loaded.value,
     outputPath,
-    overwrite,
+    overwrite ? "replace" : "refuse",
     resources,
   );
   if (written.ok) return projectWrite(loaded.value, written);

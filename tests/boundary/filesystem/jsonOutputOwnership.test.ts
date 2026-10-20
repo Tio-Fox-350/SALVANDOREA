@@ -58,7 +58,7 @@ it("closes the descriptor and retains staged content when its final identity is 
     const result = await writeTextParts(
       ["owned bytes"],
       destination,
-      false,
+      "refuse",
       resources,
     );
     if (result.ok) throw new Error("Expected unverified publication failure");
@@ -105,7 +105,7 @@ it.each([false, true])(
       const result = await writeTextParts(
         ["canonical ", "output"],
         destination,
-        overwrite,
+        overwrite ? "replace" : "refuse",
         resources,
       );
       if (!result.ok) throw result.error;
@@ -135,7 +135,7 @@ it("removes cancelled staging after the first write assigned its file ID", async
     const result = await writeTextParts(
       cancelledAfterFirstWrite(),
       destination,
-      false,
+      "refuse",
       resources,
       { signal: controller.signal, operation: "export_evidence_bundle" },
     );
@@ -158,7 +158,7 @@ it("reports committed output when post-publication staging cleanup remains owned
     const result = await writeTextParts(
       stagingPollutingParts(root),
       join(root, "bundle.json"),
-      false,
+      "refuse",
       resources,
     );
     if (result.ok) throw new Error("Expected staged cleanup failure");
@@ -201,7 +201,7 @@ it("preserves cancellation when staging cleanup also fails", async () => {
     const result = await writeTextParts(
       cancelledParts(),
       join(root, "cancelled.json"),
-      false,
+      "refuse",
       resources,
       { signal: controller.signal, operation: "export_evidence_bundle" },
     );
@@ -229,7 +229,7 @@ it("refuses to publish a staged path replaced after its descriptor opened", asyn
     const result = await writeTextParts(
       replacingStagedParts(root),
       destination,
-      false,
+      "refuse",
       resources,
     );
     if (result.ok) throw new Error("Expected staged identity rejection");
@@ -257,7 +257,7 @@ it("does not invent a staged owner when the supplied scope is closed", async () 
   const result = await writeTextParts(
     ["unused"],
     destination,
-    false,
+    "refuse",
     resources,
   );
   if (result.ok) throw new Error("Expected closed-scope admission failure");
