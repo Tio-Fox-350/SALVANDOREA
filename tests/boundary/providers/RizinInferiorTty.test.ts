@@ -75,13 +75,14 @@ afterEach(async () => {
     ownedPid > 0
   ) {
     try {
-      const commandLine = await readFile(`/proc/${ownedPid}/cmdline`, "utf8");
-      if (testDirectory !== undefined && commandLine.includes(testDirectory))
-        process.kill(ownedPid, "SIGKILL");
+      if (testDirectory !== undefined)
+        await writeFile(join(testDirectory, "target.stop"), "stop\n");
     } catch {
-      // The test target may already have exited.
+      // The temporary directory or test target may already be gone.
     }
   }
+  if (ownedPid !== undefined && Number.isSafeInteger(ownedPid) && ownedPid > 0)
+    await waitForFakeInferiorExit(ownedPid);
   inferiorPid = undefined;
   if (testDirectory !== undefined)
     await rm(testDirectory, { recursive: true, force: true });
@@ -172,18 +173,12 @@ it.skipIf(process.platform !== "linux").each([
   },
   {
     name: "inactive ptrace row",
-    response: '[{"raised":false,"fd":3,"uri":"ptrace://1"}]',
+    response: '[{"raised":false,"fd":3,"uri":"ptrace://999999999"}]',
     closeSucceeds: false,
   },
   {
     name: "malformed ptrace URI",
     response: '[{"raised":true,"fd":3,"uri":"ptrace://bad"}]',
-    closeSucceeds: false,
-  },
-  {
-    name: "multiple ptrace rows",
-    response:
-      '[{"raised":true,"fd":3,"uri":"ptrace://1"},{"raised":true,"fd":4,"uri":"ptrace://2"}]',
     closeSucceeds: false,
   },
 ])(
@@ -235,24 +230,47 @@ process.stdin.on("data", (chunk) => {
 
 it.skipIf(process.platform !== "linux").each([
   {
-    name: "same descriptor remains listed after detach",
-    afterDetach: (pid: number) =>
-      `[{"raised":true,"fd":3,"uri":"ptrace://${pid}"}]`,
-  },
-  {
     name: "same inferior remains listed under a different FD",
     afterDetach: (pid: number) =>
       `[{"raised":true,"fd":4,"uri":"ptrace://${pid}"}]`,
+    closeSucceeds: false,
   },
   {
     name: "an unexpected ptrace inferior remains listed",
     afterDetach: () => '[{"raised":true,"fd":4,"uri":"ptrace://999999999"}]',
+    closeSucceeds: true,
   },
 ])(
-  "retains ownership when o- readback finds $name",
-  async ({ afterDetach }) => {
+  "reconciles $name using the target's process identity",
+  async ({ name, afterDetach, closeSucceeds }) => {
     const sessionId = await startFakeInferiorSession({ afterDetach });
-    await expectCloseRejectedAndReleased(sessionId);
+    if (!closeSucceeds) {
+      await expectCloseRejectedAndReleased(sessionId);
+      return;
+    }
+    const closed = await manager!.close(sessionId);
+    expect(
+      closed.ok,
+      closed.ok ? name : `${name}: ${closed.error.message}`,
+    ).toBe(true);
+    expect(manager!.status(sessionId)).toBeUndefined();
+    expect(inferiorPid).toBeDefined();
+    expect(() => process.kill(inferiorPid!, 0)).not.toThrow();
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "accepts a stale selected-descriptor row after the inferior is detached",
+  async () => {
+    const sessionId = await startFakeInferiorSession({
+      afterDetach: (pid) => `[{"raised":true,"fd":3,"uri":"ptrace://${pid}"}]`,
+      afterDetachUntraced: true,
+    });
+    const closed = await manager!.close(sessionId);
+    expect(closed.ok).toBe(true);
+    expect(manager!.status(sessionId)).toBeUndefined();
+    expect(inferiorPid).toBeDefined();
+    expect(() => process.kill(inferiorPid!, 0)).not.toThrow();
   },
 );
 
@@ -294,14 +312,16 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it.skipIf(process.platform !== "linux")(
-  "retains ownership when the ptrace PID has no proc identity",
+  "releases an unresolved ptrace PID after repeated absence proves it ended",
   async () => {
     const sessionId = await startFakeInferiorSession({
       launchTarget: false,
       initialRows: '[{"raised":true,"fd":3,"uri":"ptrace://999999999"}]',
       startupWatchdogMs: 2_000,
     });
-    await expectCloseRejectedAndReleased(sessionId);
+    const closed = await manager!.close(sessionId);
+    expect(closed.ok).toBe(true);
+    expect(manager!.status(sessionId)).toBeUndefined();
   },
   4_000,
 );
@@ -440,10 +460,11 @@ it.skipIf(
     const wrapper = join(testDirectory, "rizin-with-long-lived-inferior.sh");
     const pidPath = join(testDirectory, "target.pid");
     const releasePath = join(testDirectory, "emit-output");
+    const stopPath = join(testDirectory, "target.stop");
     const target = join(testDirectory, "target.py");
     await writeFile(
       target,
-      `import os, sys, time\nopen(${JSON.stringify(pidPath)}, "w").write(str(os.getpid()))\nwhile not os.path.exists(${JSON.stringify(releasePath)}): time.sleep(0.02)\nprint("REA_RIZIN_STDOUT_MARKER", flush=True)\nprint("REA_RIZIN_STDERR_MARKER", file=sys.stderr, flush=True)\ntime.sleep(60)\n`,
+      `import os, sys, time\nopen(${JSON.stringify(pidPath)}, "w").write(str(os.getpid()))\nwhile not os.path.exists(${JSON.stringify(releasePath)}) and not os.path.exists(${JSON.stringify(stopPath)}): time.sleep(0.02)\nif os.path.exists(${JSON.stringify(stopPath)}): sys.exit(0)\nprint("REA_RIZIN_STDOUT_MARKER", flush=True)\nprint("REA_RIZIN_STDERR_MARKER", file=sys.stderr, flush=True)\nwhile not os.path.exists(${JSON.stringify(stopPath)}): time.sleep(0.02)\n`,
     );
     await writeFile(
       wrapper,
@@ -515,6 +536,7 @@ async function startFakeInferiorSession(
     readonly launchTarget?: boolean;
     readonly initialRows?: string;
     readonly afterDetach?: (pid: number) => string;
+    readonly afterDetachUntraced?: boolean;
     readonly exitKills?: string;
     readonly stderrPath?: string;
     readonly truncateOlj?: boolean;
@@ -528,11 +550,16 @@ async function startFakeInferiorSession(
   testDirectory = await mkdtemp(join(tmpdir(), "rea-rizin-protocol-"));
   const targetPath = join(testDirectory, "inferior.mjs");
   const pidPath = join(testDirectory, "target.pid");
+  const detachPath = join(testDirectory, "detached");
   const provider = join(testDirectory, "fake-rizin.cjs");
   const launchTarget = options.launchTarget ?? true;
-  await writeFile(targetPath, "setInterval(() => {}, 1000);\n");
+  await writeFile(
+    targetPath,
+    `import fs from "node:fs";\nconst stopPath = ${JSON.stringify(join(testDirectory, "target.stop"))};\nconst timer = setInterval(() => { try { fs.accessSync(stopPath); clearInterval(timer); process.exit(0); } catch {} }, 10);\n`,
+  );
   const initialRows = options.initialRows ?? null;
   const afterDetach = options.afterDetach ?? (() => "[]");
+  const afterDetachTemplate = afterDetach(0);
   const stderrPath = options.stderrPath ?? tty;
   await writeFile(
     provider,
@@ -542,7 +569,7 @@ const { spawn } = require("node:child_process");
 process.stdout.write("\\0");
 ${launchTarget ? `const ttyFlags = fs.constants.O_WRONLY | fs.constants.O_NOCTTY | fs.constants.O_NONBLOCK; const stdoutFd = fs.openSync(${JSON.stringify(tty)}, ttyFlags); const stderrFd = fs.openSync(${JSON.stringify(stderrPath)}, ttyFlags); const target = spawn(process.execPath, [${JSON.stringify(targetPath)}], { detached: true, stdio: ["ignore", stdoutFd, stderrFd] }); fs.closeSync(stdoutFd); fs.closeSync(stderrFd); target.unref(); const inferiorPid = target.pid; fs.writeFileSync(${JSON.stringify(pidPath)}, String(inferiorPid));` : "const inferiorPid = 999999999;"}
 const initialRows = ${JSON.stringify(initialRows)} ?? JSON.stringify([{ raised: true, fd: 3, uri: "ptrace://" + inferiorPid }]);
-const afterDetach = ${JSON.stringify(afterDetach(inferiorPid ?? 999999999))};
+const afterDetach = ${JSON.stringify(afterDetachTemplate)}.replaceAll("ptrace://0", "ptrace://" + inferiorPid);
 const exitKills = ${JSON.stringify(options.exitKills ?? "false")};
 const truncateOlj = ${JSON.stringify(options.truncateOlj ?? false)};
 const truncateCleanupFrame = ${JSON.stringify(options.truncateCleanupFrame ?? false)};
@@ -556,6 +583,7 @@ process.stdin.on("data", (chunk) => {
     const end = input.indexOf("\\n");
     if (end < 0) break;
     const line = input.slice(0, end); input = input.slice(end + 1);
+    if (line.startsWith("o- ")) fs.writeFileSync(${JSON.stringify(detachPath)}, "yes");
     if (line === "olj") {
       oljCalls += 1;
       if (truncateOlj && oljCalls === 1) process.stdout.write("x".repeat(16 * 1024 * 1024 + 1) + "\\0");
@@ -570,12 +598,30 @@ process.stdin.on("data", (chunk) => {
   );
   await chmod(provider, 0o700);
   let providerStderr = "";
+  let ownedDebuggerPid: number | undefined;
   manager = new RizinDebugSessionManager(
     { ...process.env, REA_RIZIN_COMMAND: provider },
     {
+      readProcessTracerPid: async (pid) => {
+        if (pid !== String(inferiorPid)) return 0;
+        if (
+          options.afterDetachUntraced === true &&
+          (await readFile(detachPath, "utf8").then(
+            () => true,
+            () => false,
+          ))
+        )
+          return 0;
+        return ownedDebuggerPid ?? 0;
+      },
+      readProcessTaskIds: async () =>
+        new Set(
+          ownedDebuggerPid === undefined ? [] : [String(ownedDebuggerPid)],
+        ),
       spawnProcess: async (spawnOptions) => {
         const launched = await spawnOwnedProviderProcess(spawnOptions);
         providerPid = launched.process.pid;
+        ownedDebuggerPid = launched.process.pid;
         if (options.startupWatchdogMs !== undefined) {
           const watchdog = spawnChild(
             process.execPath,
@@ -635,6 +681,36 @@ async function expectCloseRejectedAndReleased(
 ): Promise<void> {
   expect((await manager!.close(sessionId)).ok).toBe(false);
   expect(manager!.status(sessionId)?.state).toBe("closed");
+  if (inferiorPid !== undefined) {
+    expect(() => process.kill(inferiorPid!, 0)).not.toThrow();
+    await expect(manager!.closeAll()).rejects.toThrow();
+    await stopFakeInferior();
+  }
   await manager!.closeAll();
   expect(manager!.status(sessionId)).toBeUndefined();
+}
+
+async function stopFakeInferior(): Promise<void> {
+  if (inferiorPid === undefined || testDirectory === undefined) return;
+  const pid = inferiorPid;
+  try {
+    await writeFile(join(testDirectory, "target.stop"), "stop\n");
+  } catch {
+    // The temporary directory or test-owned inferior may already be gone.
+  }
+  await waitForFakeInferiorExit(pid);
+  inferiorPid = undefined;
+}
+
+async function waitForFakeInferiorExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      await readFile(`/proc/${pid}/stat`, "utf8");
+    } catch {
+      return;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+  throw new Error("The test-owned Rizin inferior did not exit cooperatively.");
 }

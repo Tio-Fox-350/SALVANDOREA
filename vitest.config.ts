@@ -66,10 +66,10 @@ const PROJECT_POLICIES = {
     // CLI tests create fresh command instances or subprocesses and own their
     // cleanup. Reuse the immutable graph; module mocks belong in process-global.
     isolate: false,
-    // Coverage of the shared command/schema graph exhausts the ordinary
-    // 384 MiB budget. The preloaded CLI/ADB control completes with 512 MiB;
-    // keep both profiles bounded with the same concurrency.
-    execArgv: [`--max-old-space-size=${COVERAGE_ENABLED ? "512" : "384"}`],
+    // The shared command/schema graph and preloaded CLI/ADB control exceed
+    // the ordinary 384 MiB budget in both source and built test runs.
+    // Keep both profiles bounded with the same 512 MiB heap and concurrency.
+    execArgv: [`--max-old-space-size=512`],
   },
   "process-boundary": {
     pool: "forks" as const,

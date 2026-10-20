@@ -78,19 +78,19 @@ describe("canonical test-project ownership", () => {
   });
 
   it.each([
-    { flags: [], heap: 384, timeout: 30_000, lines: 68 },
+    { flags: [], heap: 512, timeout: 30_000, lines: 68 },
     { flags: ["--coverage"], heap: 512, timeout: 60_000, lines: 68 },
     { flags: ["--coverage.enabled"], heap: 512, timeout: 60_000, lines: 68 },
-    { flags: ["--coverage=false"], heap: 384, timeout: 30_000, lines: 68 },
+    { flags: ["--coverage=false"], heap: 512, timeout: 30_000, lines: 68 },
     {
       flags: ["--coverage.enabled=false"],
-      heap: 384,
+      heap: 512,
       timeout: 30_000,
       lines: 68,
     },
     {
       flags: ["--coverage.provider=v8"],
-      heap: 384,
+      heap: 512,
       timeout: 30_000,
       lines: 68,
     },
@@ -102,7 +102,7 @@ describe("canonical test-project ownership", () => {
     },
     {
       flags: ["--coverage.enabled=false", "--shard=1/6"],
-      heap: 384,
+      heap: 512,
       timeout: 30_000,
       lines: 0,
     },
