@@ -62,6 +62,7 @@ export type CliOutputArgumentValidation =
       readonly code:
         | "UNSUPPORTED_OUTPUT_COMBINATION"
         | "INVALID_OUTPUT_FILTER"
+        | "INVALID_TOKEN_VALUE"
         | "MISSING_OUTPUT_VALUE";
       readonly message: string;
     };
@@ -72,6 +73,8 @@ interface ParsedCliOutputArguments {
   readonly fullOutput: boolean;
   /** First valued output flag that Incur skips because it has no value. */
   readonly missingValue: string | undefined;
+  /** First token flag whose value was not a non-negative integer. */
+  readonly invalidTokenValue: string | undefined;
   readonly parseError: boolean;
   readonly tokenCount: boolean;
   readonly tokenWindow: boolean;
@@ -87,6 +90,7 @@ export const parseCliOutputArguments = (
   let filterOutput: string | undefined;
   let fullOutput = false;
   let missingValue: string | undefined;
+  let invalidTokenValue: string | undefined;
   let tokenCount = false;
   let tokenLimit: number | undefined;
   let tokenOffset: number | undefined;
@@ -95,6 +99,7 @@ export const parseCliOutputArguments = (
     format,
     fullOutput,
     missingValue,
+    invalidTokenValue: parseError ? undefined : invalidTokenValue,
     parseError,
     tokenCount,
     tokenWindow:
@@ -134,8 +139,12 @@ export const parseCliOutputArguments = (
         const numericValue = Number(value);
         if (!Number.isFinite(numericValue) || value.trim() === "")
           return parsed(true);
-        if (argument === "--token-limit") tokenLimit = numericValue;
-        else tokenOffset = numericValue;
+        if (!Number.isInteger(numericValue) || numericValue < 0) {
+          invalidTokenValue ??= argument;
+        } else {
+          if (argument === "--token-limit") tokenLimit = numericValue;
+          else tokenOffset = numericValue;
+        }
         index += 1;
       } else missingValue ??= argument;
       continue;
@@ -168,9 +177,22 @@ const hasUnclosedFilterSlice = (expression: string): boolean => {
 export const validateCliOutputArguments = (
   arguments_: readonly string[],
 ): CliOutputArgumentValidation => {
-  const { filterOutput, format, missingValue, parseError, tokenWindow } =
-    parseCliOutputArguments(arguments_);
+  const {
+    filterOutput,
+    format,
+    invalidTokenValue,
+    missingValue,
+    parseError,
+    tokenWindow,
+  } = parseCliOutputArguments(arguments_);
   if (parseError) return { ok: true };
+  if (invalidTokenValue !== undefined)
+    return {
+      ok: false,
+      format: format === "yaml" || format === "jsonl" ? format : "json",
+      code: "INVALID_TOKEN_VALUE",
+      message: `${invalidTokenValue} requires a non-negative integer (0, 1, 2, …).`,
+    };
   if (filterOutput !== undefined && hasUnclosedFilterSlice(filterOutput))
     return {
       ok: false,

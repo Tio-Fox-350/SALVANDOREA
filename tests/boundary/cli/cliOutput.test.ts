@@ -131,6 +131,27 @@ describe("CLI output flag value forms", () => {
   });
 });
 
+describe("invalid CLI token window values", () => {
+  for (const [name, flags] of [
+    ["spaced negative limit", ["--token-limit", "-5"]],
+    ["equals negative limit", ["--token-limit=-5"]],
+    ["spaced fractional limit", ["--token-limit", "2.5"]],
+    ["equals fractional offset", ["--token-offset=7.5"]],
+  ] as const)
+    workspaceCliTest(
+      `rejects a ${name} before running the command`,
+      async ({ cli }) => {
+        const result = await cli.run({
+          arguments: ["providers", ...flags],
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stdout).toContain("INVALID_TOKEN_VALUE");
+      },
+      CLI_INTEGRATION_TIMEOUT_MS,
+    );
+});
+
 describe("unclosed CLI output filter slices", () => {
   it.each([
     "providers[",
