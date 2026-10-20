@@ -614,6 +614,62 @@ export const nativeFunctionMatchingSummaryViewResultSchema = z.strictObject({
   summary: nativeFunctionMatchingViewContextSchema,
 });
 
+/** Compact analyze_function dossier; the complete dossier stays retained for facet paging. */
+export const nativeFunctionSummarySchema = z.strictObject({
+  procedure: z.strictObject({
+    name: z.string(),
+    address: z.string(),
+  }),
+  pseudocode: z.strictObject({
+    available: z
+      .boolean()
+      .describe(
+        "Provider facet_availability for pseudocode when declared; otherwise whether decompiled text is present. The flag is authoritative over raw length.",
+      ),
+    code_units: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        "Pseudocode length in UTF-16 code units, the unit inspect_analysis_view pages pseudocode by.",
+      ),
+  }),
+  value_flow: z.strictObject({
+    available: z.boolean(),
+    truncated: z
+      .boolean()
+      .describe(
+        "True only when value-flow is available and the provider truncated it; false when value-flow is unavailable (see available).",
+      ),
+  }),
+  counts: z.strictObject({
+    assembly: z.number().int().nonnegative(),
+    basic_blocks: z.number().int().nonnegative(),
+    comments: z.number().int().nonnegative(),
+    callers: z.number().int().nonnegative(),
+    callees: z.number().int().nonnegative(),
+    incoming_references: z.number().int().nonnegative(),
+    outgoing_references: z.number().int().nonnegative(),
+    unresolved_calls: z.number().int().nonnegative(),
+    referenced_strings: z.number().int().nonnegative(),
+    referenced_names: z.number().int().nonnegative(),
+    value_flow_operations: z.number().int().nonnegative(),
+    value_flow_def_use: z.number().int().nonnegative(),
+    value_flow_effects: z.number().int().nonnegative(),
+    value_flow_parameters: z.number().int().nonnegative(),
+    value_flow_parameter_uses: z.number().int().nonnegative(),
+  }),
+  limitation_count: z.number().int().nonnegative(),
+});
+
+/** Compact analyze_function summary that retains the complete native dossier Evidence. */
+export const nativeFunctionSummaryViewResultSchema = z.strictObject({
+  ...summaryViewResultBase,
+  parent_operation: z.literal("analyze_function"),
+  procedure_address: z.string().nullable(),
+  summary: nativeFunctionSummarySchema,
+});
+
 /** Projected facts for one selected view of retained analysis Evidence. */
 export const analysisViewResultSchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -679,6 +735,7 @@ export const analysisViewResultSchema = z.discriminatedUnion("kind", [
     modelArtifactSummaryViewResultSchema,
     nativeInventorySummaryViewResultSchema,
     nativeFunctionMatchingSummaryViewResultSchema,
+    nativeFunctionSummaryViewResultSchema,
   ]),
   z.strictObject({
     ...viewResultBase,
