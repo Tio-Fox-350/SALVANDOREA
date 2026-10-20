@@ -155,7 +155,12 @@ rejection without a reason. That cleanup stays owned until a later close or
 call releases it. Another server does not open while the cleanup remains, and
 a cleanup that already succeeded is not run again. Pass
 `mcpCall` when a case needs its own server, environment, or lifecycle. CLI
-cases still start a fresh process.
+cases for that helper share one compiled CLI process per child environment.
+The first case pays process startup; later cases reuse the loaded runtime.
+A different environment restarts that process. `cli.run` still starts a fresh
+process, including stdin and explicit deadlines. File teardown stops the shared
+CLI process, including startup still in flight, and does not open another
+after close.
 
 The Apple artifact verifier step shares a job-temporary bytecode cache among
 its fresh CLI/MCP children via `REA_ARTIFACT_NODE_COMPILE_CACHE`. The artifact
