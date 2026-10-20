@@ -2370,7 +2370,116 @@ public final class ReaGhidraBridge extends HeadlessScript {
         for (int index = 0; index < recoveredJumpTables.length; index += 1) {
             jumpTables.add(inferredJumpTable(recoveredJumpTables[index], caseTokens));
         }
+        result.add(
+            "unresolved_indirect_branches",
+            unresolvedIndirectBranches(
+                function,
+                recoveredJumpTables,
+                decompiledText(decompilation)
+            )
+        );
         return result;
+    }
+
+    private static final Pattern DECOMPILER_JUMP_TABLE_FAILURE = Pattern.compile(
+        "Could not recover jumptable at (?:([A-Za-z_][A-Za-z0-9_]*):+)?(?:0x)?([0-9A-Fa-f]+)[^\\r\\n*]*"
+    );
+
+    /**
+     * Report computed jumps that Ghidra's listing keeps inside this function
+     * but for which the decompiler recovered no jump table. When jump-table
+     * recovery fails, the decompiler rewrites the BRANCHIND as a call or return
+     * (FlowInfo::truncateIndirectJump), so these sites never reach HighFunction
+     * jump tables. Each site keeps the decompiler's own outcome: an explicit
+     * "Could not recover jumptable" warning, or no warning (for example Ghidra's
+     * thunk heuristic). Neither outcome separates a dispatch from an indirect
+     * tail call, so targets stay unknown either way.
+     */
+    private JsonArray unresolvedIndirectBranches(
+        Function function,
+        JumpTable[] recoveredJumpTables,
+        String pseudocode
+    ) throws Exception {
+        Set<Address> switches = new HashSet<>();
+        for (JumpTable table : recoveredJumpTables) switches.add(table.getSwitchAddress());
+        // Keyed by address space and offset: an unprefixed warning address is
+        // in the default space, and a prefixed one must name the branch's space.
+        Map<String, String> failedRecoveries = new TreeMap<>();
+        if (pseudocode != null) {
+            java.util.regex.Matcher matcher = DECOMPILER_JUMP_TABLE_FAILURE.matcher(pseudocode);
+            while (matcher.find()) {
+                try {
+                    failedRecoveries.putIfAbsent(
+                        warningSpaceKey(matcher.group(1), Long.parseUnsignedLong(matcher.group(2), 16)),
+                        matcher.group(0).trim()
+                    );
+                }
+                catch (NumberFormatException ignored) {
+                    // A warning without a parseable address cannot be attributed.
+                }
+            }
+        }
+        JsonArray branches = new JsonArray();
+        InstructionIterator instructions = currentProgram.getListing().getInstructions(
+            function.getBody(), true
+        );
+        while (instructions.hasNext()) {
+            monitor.checkCancelled();
+            Instruction instruction = instructions.next();
+            FlowType flow = instruction.getFlowType();
+            if (!flow.isJump() || !flow.isComputed() || flow.isCall() || flow.isTerminal()) continue;
+            Address address = instruction.getAddress();
+            if (switches.contains(address)) continue;
+            String warning = address.isMemoryAddress()
+                ? failedRecoveries.get(
+                    warningSpaceKey(address.getAddressSpace().getName(), address.getOffset())
+                )
+                : null;
+            JsonObject branch = new JsonObject();
+            String branchAddress = canonicalAddress(address);
+            branch.addProperty("branch_address", branchAddress);
+            branch.addProperty(
+                "decompiler_outcome",
+                warning == null ? "no_jump_table_warning" : "jump_table_recovery_failed"
+            );
+            JsonArray listingTargets = new JsonArray();
+            for (Address target : instruction.getFlows()) listingTargets.add(canonicalAddress(target));
+            branch.add("listing_targets", listingTargets);
+            JsonArray evidence = new JsonArray();
+            evidence.add(
+                inferenceEvidence(
+                    "indirect-branch",
+                    "ghidra-listing",
+                    "Ghidra's listing marks " + instruction.getMnemonicString() +
+                    " at " + branchAddress + " as a computed jump (" + flow +
+                    ") inside this function, and the decompiler recovered no jump table at that address." +
+                    (listingTargets.isEmpty()
+                        ? " The listing records no flow targets for it."
+                        : " The listing records " + listingTargets.size() +
+                          " flow target(s) without case values; they are reference observations, not proof of runtime reachability.")
+                )
+            );
+            if (warning != null) {
+                evidence.add(
+                    inferenceEvidence(
+                        "indirect-branch",
+                        "ghidra-decompiler-warning",
+                        "The decompiler reported \"" + warning +
+                        "\" and rewrote the branch as a call or return in its pseudocode."
+                    )
+                );
+            }
+            branch.add("evidence", evidence);
+            branches.add(branch);
+        }
+        return branches;
+    }
+
+    /** An absent or default-space name both denote the default address space. */
+    private String warningSpaceKey(String space, long offset) {
+        String defaultSpace = currentProgram.getAddressFactory().getDefaultAddressSpace().getName();
+        String normalized = space == null || space.equals(defaultSpace) ? "" : space;
+        return normalized + ":" + Long.toUnsignedString(offset, 16);
     }
 
     private static JsonObject unavailableNativeValueFlow(String reason) {

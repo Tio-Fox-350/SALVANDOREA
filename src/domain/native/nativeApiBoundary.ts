@@ -10,6 +10,7 @@ const inferenceEvidenceSchema = z
       "type-lock",
       "calling-convention",
       "jump-table",
+      "indirect-branch",
     ]),
     source: z.string().min(1),
     detail: z.string().min(1),
@@ -87,6 +88,20 @@ const inferredJumpTableSchema = z
   })
   .strict();
 
+/**
+ * A computed jump inside the analyzed function whose targets the provider did
+ * not recover as a jump table. The decompiler outcome is reported, not inferred.
+ */
+const unresolvedIndirectBranchSchema = z.strictObject({
+  branch_address: z.string().min(1),
+  decompiler_outcome: z.enum([
+    "jump_table_recovery_failed",
+    "no_jump_table_warning",
+  ]),
+  listing_targets: z.array(z.string().min(1)),
+  evidence: z.array(inferenceEvidenceSchema).min(1),
+});
+
 const availableNativeApiBoundarySchema = z
   .object({
     available: z.literal(true),
@@ -96,6 +111,12 @@ const availableNativeApiBoundarySchema = z
     return_type: inferredReturnTypeSchema,
     parameters: z.array(inferredParameterTypeSchema),
     jump_tables: z.array(inferredJumpTableSchema),
+    unresolved_indirect_branches: z
+      .array(unresolvedIndirectBranchSchema)
+      .exactOptional()
+      .describe(
+        "Computed jumps inside the function with no recovered jump table. Absent when the provider did not inspect indirect branches, which is not evidence that none exist.",
+      ),
     pseudocode: z
       .object({
         classification: z.literal("decompiler-generated-non-source"),
