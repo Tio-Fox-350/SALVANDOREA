@@ -4,6 +4,12 @@ import { BinaryLayoutService } from "../application/binaryDiagnostics/BinaryLayo
 import { PwntoolsLayoutProvider } from "../native/pwntools/PwntoolsLayoutProvider.js";
 import { PeResourcesService } from "../application/binaryDiagnostics/PeResourcesService.js";
 import { PeResourcesProvider } from "../native/pe/PeResourcesProvider.js";
+import { WindowsMinidumpService } from "../application/binaryDiagnostics/WindowsMinidumpService.js";
+import { WindowsMinidumpProvider } from "../native/minidump/WindowsMinidumpProvider.js";
+
+/** Portable recorded minidump inspection; no debugger, symbols or live target. */
+export const createWindowsMinidumpService = (): WindowsMinidumpService =>
+  new WindowsMinidumpService(new WindowsMinidumpProvider());
 
 /** Portable PE inspection with no engine, installation or target acquisition. */
 export const createPeResourcesService = (): PeResourcesService =>

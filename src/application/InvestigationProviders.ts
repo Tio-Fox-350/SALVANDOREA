@@ -49,6 +49,13 @@ export const PE_RESOURCES_PROVIDER = Object.freeze({
   version: "1",
 } as const);
 
+/** Provider identity for portable, execution-free recorded minidump decoding. */
+export const WINDOWS_MINIDUMP_PROVIDER = Object.freeze({
+  id: "rea-windows-minidump",
+  name: "REA Windows minidump parser",
+  version: "1",
+} as const);
+
 /** Provider identity for deterministic managed-code comparison workflows. */
 export const MANAGED_WORKFLOW_PROVIDER = {
   id: "rea-dotnet-workflows",

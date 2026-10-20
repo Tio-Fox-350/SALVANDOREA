@@ -26,6 +26,8 @@ const EXECUTION_WORDING_EXCEPTIONS: Readonly<Record<string, string>> = {
   inspect_native_load_image: "states that it does not execute the target",
   resolve_native_call_targets: "states that it does not execute code",
   inspect_pe_resources: "states that it does not execute the image",
+  inspect_windows_minidump:
+    "reads a recorded dump without launching or attaching to any process",
   inspect_desktop_application:
     "states that directory triage performs no target execution",
   inspect_go_binary: "reads embedded metadata without executing the target",

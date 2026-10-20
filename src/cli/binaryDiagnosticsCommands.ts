@@ -3,6 +3,7 @@ import {
   createRecordedCrashService,
   createBinaryLayoutService,
   createPeResourcesService,
+  createWindowsMinidumpService,
 } from "../composition/binaryDiagnostics.js";
 import { CLI_COMMANDS } from "../cliCommandNames.js";
 import { logCliCommand } from "../cliLogging.js";
@@ -10,6 +11,7 @@ import type { Logger } from "pino";
 import type { CliInstance } from "./types.js";
 import { withCommandCancellation } from "./commandCancellation.js";
 import { inspectPeResourcesInputSchema } from "../domain/native/peResources.js";
+import { inspectWindowsMinidumpInputSchema } from "../domain/native/windowsMinidump.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { finishAnalysisCommand } from "./finishAnalysisCommand.js";
 import { absoluteCallerPath } from "../filesystem/callerPath.js";
@@ -48,6 +50,39 @@ export const registerBinaryDiagnosticsCommands = (
               pe,
               "rea-pe-resources",
               "inspect_pe_resources",
+              signal,
+            ),
+        );
+      }),
+  });
+  cli.command(CLI_COMMANDS.inspectWindowsMinidump, {
+    description:
+      "Inspect recorded Windows minidump streams, threads, exception, modules and memory ranges without attaching",
+    args: z.object({ path: z.string().describe("Local Windows minidump") }),
+    options: z.object({
+      maxFileBytes: inspectWindowsMinidumpInputSchema.shape.max_file_bytes,
+      maxEntries: inspectWindowsMinidumpInputSchema.shape.max_entries,
+    }),
+    run: ({ args, options }) =>
+      withCommandCancellation(async (signal) => {
+        const minidump = createWindowsMinidumpService();
+        return await logCliCommand(
+          logger,
+          CLI_COMMANDS.inspectWindowsMinidump,
+          async () =>
+            finishAnalysisCommand(
+              () =>
+                minidump.inspect(
+                  {
+                    path: absoluteCallerPath(args.path),
+                    max_file_bytes: options.maxFileBytes,
+                    max_entries: options.maxEntries,
+                  },
+                  { signal },
+                ),
+              minidump,
+              "rea-windows-minidump",
+              "inspect_windows_minidump",
               signal,
             ),
         );
