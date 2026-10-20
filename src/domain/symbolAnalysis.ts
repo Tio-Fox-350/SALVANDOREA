@@ -2,6 +2,7 @@ import type { JsonValue } from "./jsonValue.js";
 import type { AddressedName } from "./hopperValues.js";
 import {
   classifySwiftSymbol,
+  containsLegacySwiftProtocolName,
   isSwiftMangledSymbolName,
   type SwiftTypeCategory,
 } from "./swiftSymbolClassification.js";
@@ -48,7 +49,7 @@ export const discoverObjcProtocols = (
     names.filter(
       ({ name }) =>
         name.includes(OBJC_PROTOCOL_MARKER) ||
-        name.includes("_TtP") ||
+        containsLegacySwiftProtocolName(name) ||
         (name.endsWith("Mp") &&
           classifySwiftSymbol(name)?.category === "protocols"),
     ),

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { categorizeSwiftTypes } from "./symbolAnalysis.js";
+import {
+  categorizeSwiftTypes,
+  discoverObjcProtocols,
+} from "./symbolAnalysis.js";
 
 describe("modern Swift category evidence", () => {
   it.each([
@@ -166,4 +169,37 @@ describe("Swift alias ambiguity", () => {
       });
     },
   );
+});
+
+describe("Objective-C labels that merely contain _Tt", () => {
+  const labels = (selector: string) => [
+    { address: "0x1", name: `-[Widget ${selector}]` },
+    { address: "0x2", name: `_objc_msgSend$${selector}` },
+  ];
+
+  it.each(["_TtReset", "_TtPing"])(
+    "are not Swift observations or protocols: %s",
+    (selector) => {
+      expect(categorizeSwiftTypes(labels(selector))).toMatchObject({
+        total: 0,
+        unclassified: [],
+      });
+      expect(discoverObjcProtocols(labels(selector))).toEqual({
+        count: 0,
+        protocols: [],
+      });
+    },
+  );
+
+  it("keeps embedded legacy Swift runtime names", () => {
+    expect(
+      discoverObjcProtocols([
+        { address: "0x1", name: "_OBJC_PROTOCOL_$__TtP5Hello5Proto_" },
+        { address: "0x2", name: "_TtPs5Error_" },
+      ]),
+    ).toMatchObject({ count: 2 });
+    expect(
+      categorizeSwiftTypes([{ address: "0x1", name: "-[_TtC5Hello3Foo bar]" }]),
+    ).toMatchObject({ total: 1 });
+  });
 });
