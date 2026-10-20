@@ -1102,6 +1102,82 @@ describe("native DMG command failure diagnostics", () => {
   });
 });
 
+describe("native DMG preexisting attachment", () => {
+  it.each([
+    { listed: "target", outcome: "unknown coverage" },
+    { listed: "other", outcome: "failure" },
+  ] as const)(
+    "reports $outcome when attach fails while hdiutil lists the $listed image",
+    async ({ listed }) => {
+      const parent = await createTestTempDirectory("rea-dmg-preexisting-");
+      const path = join(parent, "image.dmg");
+      const image = Buffer.alloc(512);
+      image.write("koly", 0, "ascii");
+      await writeFile(path, image);
+      const calls: string[][] = [];
+      const host: NativeDmgHost = {
+        run(arguments_) {
+          calls.push([...arguments_]);
+          if (arguments_[0] === "info")
+            return Promise.resolve({
+              stdout: infoPlist(
+                listed === "target" ? path : join(parent, "other.dmg"),
+                [{ "dev-entry": "/dev/disk51", "mount-point": "/Volumes/X" }],
+              ),
+              exitCode: 0,
+            });
+          if (arguments_[0] === "attach")
+            return Promise.resolve({
+              stdout: "",
+              stderr: "hdiutil: attach failed - Resource busy\n",
+              exitCode: 1,
+            });
+          return Promise.resolve({ stdout: "", exitCode: 0 });
+        },
+      };
+      const resourceScope = new ArtifactResourceScope();
+      onTestFinished(() => resourceScope.close());
+      const inventory = scanCanonicalArtifactInventory(
+        path,
+        { resourceScope },
+        (inputPath, _format, environment) =>
+          new NativeDmgArtifactReader(inputPath, environment, host),
+      );
+
+      if (listed === "other")
+        await expect(inventory).rejects.toMatchObject({
+          reason: "unavailable",
+          message: expect.stringContaining("Resource busy"),
+        });
+      else {
+        const snapshot = await inventory;
+        expect(snapshot.manifest).toMatchObject({
+          root_format: "dmg",
+          occurrence_count: 1,
+        });
+        expect(snapshot.coverage).toEqual({
+          scope: "container-entries",
+          status: "unknown",
+        });
+        expect(snapshot.limitations).toEqual([
+          expect.stringMatching(
+            /^DMG child inventory is unknown: hdiutil refused a private read-only attachment \(exit 1\)/u,
+          ),
+        ]);
+        expect(snapshot.provenance.map((entry) => entry.exit_code)).toEqual([
+          0, 1,
+        ]);
+      }
+      expect(calls.map(([operation]) => operation)).toEqual([
+        "verify",
+        "info",
+        "attach",
+        "info",
+      ]);
+    },
+  );
+});
+
 describe("native DMG command diagnostics", () => {
   it("keeps unknown attach failures unavailable with command evidence", async () => {
     await expect(

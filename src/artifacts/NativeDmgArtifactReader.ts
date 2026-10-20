@@ -9,6 +9,7 @@ import {
   ArtifactReaderFailure,
   type ArtifactEntry,
   type ArtifactReader,
+  type ArtifactReaderTraversal,
   type ArtifactTraversalOptions,
 } from "./ArtifactReader.js";
 import { DirectoryArtifactReader } from "./DirectoryArtifactReader.js";
@@ -149,6 +150,7 @@ export class NativeDmgArtifactReader implements ArtifactReader {
   #attachOutputReturned = false;
   #attachMayHaveMounted = false;
   #ownershipUncertainty: string | undefined;
+  #preexistingAttachment: ArtifactReaderTraversal | undefined;
   #closed = false;
   #closePromise: Promise<void> | undefined;
   readonly #activeDirectoryOperations = new Set<Promise<unknown>>();
@@ -172,6 +174,10 @@ export class NativeDmgArtifactReader implements ArtifactReader {
     options?: ArtifactTraversalOptions,
   ): AsyncIterable<ArtifactEntry> {
     await this.#ensureAttached(signal);
+    if (this.#preexistingAttachment !== undefined) {
+      options?.onCoverage?.(this.#preexistingAttachment);
+      return;
+    }
     const directory = this.#directory;
     if (directory === undefined)
       throw new ArtifactReaderFailure("unavailable", "DMG is not attached");
@@ -413,22 +419,20 @@ export class NativeDmgArtifactReader implements ArtifactReader {
     );
     const mountRoot = await realpath(await mkdtemp(join(tmpdir(), "rea-dmg-")));
     this.#mountRoot = mountRoot;
+    const attachArguments = [
+      "attach",
+      "-readonly",
+      "-nobrowse",
+      "-plist",
+      "-mountroot",
+      mountRoot,
+      this.path,
+    ];
     try {
       this.#attachMayHaveMounted = true;
-      const attached = await runChecked(
-        this.host,
-        [
-          "attach",
-          "-readonly",
-          "-nobrowse",
-          "-plist",
-          "-mountroot",
-          mountRoot,
-          this.path,
-        ],
-        signal,
-        { timeoutMs: HDIUTIL_COMMAND_TIMEOUT_MS },
-      );
+      const attached = await runChecked(this.host, attachArguments, signal, {
+        timeoutMs: HDIUTIL_COMMAND_TIMEOUT_MS,
+      });
       this.#attachOutputReturned = true;
       let parsed: NativeDmgAttachOutput;
       try {
@@ -454,20 +458,7 @@ export class NativeDmgArtifactReader implements ArtifactReader {
             ? `DMG attachment ownership is uncertain: ${this.#ownershipUncertainty ?? "no unique mount under the owned root"}`
             : "hdiutil did not mount a new image beneath the owned root",
         );
-      this.#provenance.push(
-        command(
-          [
-            "attach",
-            "-readonly",
-            "-nobrowse",
-            "-plist",
-            "-mountroot",
-            mountRoot,
-            this.path,
-          ],
-          ["read", "mount"],
-        ),
-      );
+      this.#provenance.push(command(attachArguments, ["read", "mount"]));
       this.#directory = new DirectoryArtifactReader(mountRoot);
     } catch (cause: unknown) {
       if (cause instanceof NativeDmgCommandFailure && cause.stdout !== "") {
@@ -482,8 +473,57 @@ export class NativeDmgArtifactReader implements ArtifactReader {
         this.#attachMayHaveMounted = false;
         this.#ownershipUncertainty = undefined;
       }
-      throw cause;
+      this.#preexistingAttachment = await this.#preexistingAttachmentCoverage(
+        cause,
+        baseline,
+        attachArguments,
+      );
+      if (this.#preexistingAttachment === undefined) throw cause;
     }
+  }
+
+  /**
+   * hdiutil refuses a private attachment while another owner holds this image.
+   * The root remains observable; child coverage stays unknown, and the
+   * existing attachment is never traversed, borrowed or detached.
+   */
+  async #preexistingAttachmentCoverage(
+    cause: unknown,
+    baseline: NativeDmgInfo,
+    attachArguments: readonly string[],
+  ): Promise<ArtifactReaderTraversal | undefined> {
+    if (
+      !(cause instanceof NativeDmgCommandFailure) ||
+      cause.exitCode === null ||
+      cause.reason !== "unavailable" ||
+      !(await this.#baselineAttachesTarget(baseline))
+    )
+      return undefined;
+    try {
+      if ((await this.#resolveAttachOwnership()) !== "none") return undefined;
+    } catch {
+      // The attach failure remains primary; close() reconciles ownership again.
+      return undefined;
+    }
+    this.#provenance.push(command(attachArguments, ["read"], cause.exitCode));
+    return {
+      status: "unknown",
+      limitations: [
+        `DMG child inventory is unknown: hdiutil refused a private read-only attachment (exit ${String(cause.exitCode)}) while it already listed an attachment of this image path. REA did not traverse, borrow or detach that attachment; release it and retry to inventory children.`,
+      ],
+    };
+  }
+
+  async #baselineAttachesTarget(baseline: NativeDmgInfo): Promise<boolean> {
+    const target = await realpath(this.path).catch(() => undefined);
+    if (target === undefined) return false;
+    for (const image of baseline.images) {
+      const imagePath = image["image-path"];
+      if (imagePath === undefined) continue;
+      if ((await realpath(imagePath).catch(() => undefined)) === target)
+        return true;
+    }
+    return false;
   }
 
   async #verify(signal?: AbortSignal): Promise<void> {
