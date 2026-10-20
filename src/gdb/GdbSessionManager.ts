@@ -913,6 +913,9 @@ export class GdbSessionManager {
       // Before publication no target command can run. Once usable, the
       // inferior state is no longer inferred from startup phase.
       session.noInferiorVerified = false;
+      // Ready only after every startup check passed. A failed startup retained
+      // for cleanup keeps its owner but never becomes a usable session.
+      session.ready = true;
       this.#sessions.set(id, session);
       releaseReservation();
       return ok({ session_id: id, mi_version: miVersion });
