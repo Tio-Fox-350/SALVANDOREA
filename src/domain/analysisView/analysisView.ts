@@ -15,7 +15,7 @@ import {
   fridaSessionStatusViewContext,
   projectFridaSessionStatusView,
 } from "./fridaSessionStatusView.js";
-import { commandObservationSchema } from "../commandObservation.js";
+import { commandObservationSummarySchema } from "../commandObservation.js";
 import {
   goBinarySummarySchema,
   goBinaryViewContextSchema,
@@ -443,7 +443,7 @@ export const objdumpSummaryViewResultSchema = z.strictObject({
   ...commandSummaryContext,
   parent_operation: z.literal("inspect_with_objdump"),
   artifact: artifactSchema.nullable(),
-  summary: commandObservationSchema,
+  summary: commandObservationSummarySchema,
 });
 
 export const fridaSessionStatusSummaryViewResultSchema = z.strictObject({

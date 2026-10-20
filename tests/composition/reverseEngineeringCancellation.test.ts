@@ -141,7 +141,8 @@ const expectCancelledResult = (result: CancellationResult): void => {
   expect(result.error.capturedOutput).toMatchObject({
     stdout: "provider output before cancellation",
     stderr: "",
-    truncated: false,
+    stdout_bytes: 35,
+    stderr_bytes: 0,
     exit_code: null,
     signal: "SIGKILL",
   });
@@ -149,9 +150,15 @@ const expectCancelledResult = (result: CancellationResult): void => {
   expect(result.error.partialObservation).toMatchObject({
     raw_result: {
       stdout: "provider output before cancellation",
+      stderr: "",
+    },
+    normalized_result: {
       completion_status: "unknown",
     },
   });
+  expect(result.error.partialObservation).not.toHaveProperty(
+    "normalized_result.stdout",
+  );
 };
 
 const cleanupCancellationScenario = async (options: {

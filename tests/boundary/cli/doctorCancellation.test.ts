@@ -97,7 +97,10 @@ setTimeout(() => process.exit(99), 20000);
         )
         .toBe(true);
       const readyRecord: unknown = JSON.parse(await readFile(ready, "utf8"));
-      const observed: { readonly pid: number; readonly runId?: string } =
+      const observed: {
+        readonly pid: number;
+        readonly runId?: string | undefined;
+      } =
         provider === "jadx"
           ? z
               .strictObject({
@@ -106,15 +109,21 @@ setTimeout(() => process.exit(99), 20000);
               })
               .parse(readyRecord)
           : z
-              .strictObject({ pid: z.number().int().positive() })
+              .strictObject({
+                pid: z.number().int().positive(),
+                // The Kuna direct-exec probe can inherit a run ID, but it is
+                // not part of an owned process group.
+                runId: z.string().optional(),
+              })
               .parse(readyRecord);
       if (provider === "jadx") {
         if (observed.runId === undefined)
           throw new Error("Missing JADX run token");
+        const runId = z.string().uuid().parse(observed.runId);
         ownership = {
           leaderPid: observed.pid,
           processGroupId: observed.pid,
-          runId: observed.runId,
+          runId,
         };
       }
       child.kill(signal);

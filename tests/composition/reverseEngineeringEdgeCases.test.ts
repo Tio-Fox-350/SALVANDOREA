@@ -14,6 +14,7 @@ import { AnalysisCapabilityUnavailableError } from "../../src/domain/analysisErr
 import { ReverseEngineeringService as CoreReverseEngineeringService } from "../../src/application/reverse/ReverseEngineeringService.js";
 import { createReverseEngineeringCommandPort } from "../../src/composition/reverseEngineering.js";
 import { AnalysisResourceConstraintError } from "../../src/domain/analysisErrorCore.js";
+import { projectAnalysisError } from "../../src/domain/analysisErrorProjection.js";
 import { objdumpCommand } from "../../src/objdump/ObjdumpCommand.js";
 import {
   OwnedCommandFailure,
@@ -24,6 +25,55 @@ import { REVERSE_ENGINEERING_TOOL_CONTRACTS } from "../../src/contracts/reverseE
 
 registerSharedReverseEngineeringEdgeCaseTests();
 registerOwnedRizinCommandEvidenceTests({ sweepTokenOwnedProcesses: true });
+
+it("preserves guidance when the host cannot enforce requested descendant ownership", async () => {
+  const service = new CoreReverseEngineeringService({
+    commands: createReverseEngineeringCommandPort({}),
+    runOwned: async () => {
+      throw Object.assign(
+        new Error(
+          "Token-owned process cleanup requires a host ownership baseline; use Linux or macOS.",
+        ),
+        { code: "ERR_PROCESS_OWNERSHIP_UNAVAILABLE" },
+      );
+    },
+  });
+  try {
+    expect(
+      await service.inspectWithObjdump({ operation: "architectures" }),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        _tag: "AnalysisCapabilityUnavailableError",
+        reason: expect.stringContaining("host ownership baseline"),
+      },
+    });
+  } finally {
+    await service.close();
+  }
+});
+
+it("preserves a direct process ownership preparation capability failure", async () => {
+  const remediation = new AnalysisCapabilityUnavailableError(
+    "process-ownership",
+    "prepare_owned_process",
+    "Install a procps-compatible ps on REA's PATH.",
+    { userMessage: "Install procps." },
+  );
+  const service = new CoreReverseEngineeringService({
+    commands: createReverseEngineeringCommandPort({}),
+    runOwned: async () => {
+      throw remediation;
+    },
+  });
+  try {
+    expect(
+      await service.inspectWithObjdump({ operation: "architectures" }),
+    ).toEqual({ ok: false, error: remediation });
+  } finally {
+    await service.close();
+  }
+});
 
 it("records pathless objdump architecture support as provider capability evidence", async () => {
   const { directory, path } = await createArtifact();
@@ -263,20 +313,19 @@ it("cancels an artifact stream when cancellation races with its listener registr
 
 it("cancels before stream listeners when the signal changes after stat", async () => {
   const { directory, path } = await createArtifact();
-  let abortedReads = 0;
-  const signal = {
-    get aborted() {
-      abortedReads += 1;
-      return abortedReads >= 5;
-    },
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    dispatchEvent: () => true,
-    onabort: null,
-    reason: undefined,
-    throwIfAborted: () => {},
-  } as AbortSignal;
-  const stat = vi.fn(async () => ({ isFile: () => true }) as unknown as Stats);
+  // Tie cancellation to the metadata boundary instead of counting unrelated
+  // reads of signal.aborted in admission and provider resolution.
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const stat = vi.fn(
+    async () =>
+      ({
+        isFile: () => {
+          controller.abort();
+          return true;
+        },
+      }) as unknown as Stats,
+  );
   const run = vi.fn(async () => ({ stdout: "", stderr: "" }));
   const service = new ReverseEngineeringService({ stat, run });
 
@@ -290,8 +339,6 @@ it("cancels before stream listeners when the signal changes after stat", async (
       ok: false,
       error: { _tag: "AnalysisCancelledError" },
     });
-    // Cancellation checks may be repeated by the digest cleanup path.
-    expect(abortedReads).toBeGreaterThanOrEqual(5);
     expect(stat).toHaveBeenCalledTimes(1);
     expect(run).not.toHaveBeenCalled();
   } finally {
@@ -626,6 +673,15 @@ it("preserves raw retained byte counts when output text replaces invalid UTF-8",
           stderr: "�",
           stdout_bytes: 1,
           stderr_bytes: 2,
+          exit_code: null,
+        },
+        partialObservation: {
+          raw_result: {
+            stdout: "�",
+            stderr: "�",
+            stdout_bytes: 1,
+            stderr_bytes: 2,
+          },
         },
       },
     });
@@ -813,6 +869,75 @@ it("retains a capability failure when its injected owned runner also reports inc
   }
 });
 
+it("aggregates every retained reverse owner during cleanup retry", async () => {
+  const { directory, path } = await createArtifact();
+  let firstCanStop = false;
+  let secondCanStop = false;
+  const owner = (which: "first" | "second") =>
+    ({
+      stop: vi.fn(async () =>
+        (which === "first" ? firstCanStop : secondCanStop)
+          ? { status: "verified-cleanup" as const }
+          : { status: "incomplete" as const, reason: `${which} still active` },
+      ),
+    }) as unknown as ProviderProcessSupervisor;
+  const first = owner("first");
+  const second = owner("second");
+  let launch = 0;
+  const service = new ReverseEngineeringService({
+    runOwned: async () => {
+      const current = launch++ === 0 ? first : second;
+      throw new OwnedCommandFailure(
+        "process",
+        "Command owner remains active.",
+        null,
+        "cleanup is incomplete",
+        { cause: new Error("fixture failure") },
+        [`${launch}-run`, `pid:${launch}`],
+        current,
+      );
+    },
+  });
+  try {
+    const outcomes = await Promise.all([
+      service.executeRizinCommand({ path, command: "first" }),
+      service.executeRizinCommand({ path, command: "second" }),
+    ]);
+    expect(outcomes.every((outcome) => !outcome.ok)).toBe(true);
+
+    const bothPending = await service.retryCleanup();
+    expect(bothPending.ok).toBe(false);
+    if (!bothPending.ok) {
+      expect(bothPending.error.cleanupResources).toEqual(
+        expect.arrayContaining(["1-run", "pid:1", "2-run", "pid:2"]),
+      );
+      expect(projectAnalysisError(bothPending.error)).toMatchObject({
+        details: {
+          cleanup_reason: expect.stringContaining("first still active"),
+        },
+      });
+      expect(
+        projectAnalysisError(bothPending.error).details?.cleanup_reason,
+      ).toContain("second still active");
+    }
+
+    firstCanStop = true;
+    const secondPending = await service.retryCleanup();
+    expect(secondPending.ok).toBe(false);
+    if (!secondPending.ok)
+      expect(secondPending.error.cleanupResources).toEqual(["2-run", "pid:2"]);
+    if (!bothPending.ok)
+      expect(bothPending.error.cleanupResources).toEqual(["2-run", "pid:2"]);
+    secondCanStop = true;
+    await expect(service.retryCleanup()).resolves.toMatchObject({ ok: true });
+    expect(first.stop).toHaveBeenCalledTimes(2);
+    expect(second.stop).toHaveBeenCalledTimes(3);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("preserves a provider timeout when cancellation arrives during the final digest", async () => {
   const { directory, path } = await createArtifact();
   const controller = new AbortController();
@@ -848,7 +973,7 @@ it("preserves a provider timeout when cancellation arrives during the final dige
           stderr: "timeout diagnostic",
         },
         partialObservation: {
-          raw_result: {
+          normalized_result: {
             stdout: "partial timeout output",
             completion_status: "unknown",
           },
@@ -945,7 +1070,7 @@ it("preserves completed command Evidence while its post-run digest awaits cleanu
       error: {
         _tag: "AnalysisOutputError",
         partialObservation: {
-          raw_result: {
+          normalized_result: {
             exit_code: 0,
             completion_status: "complete",
             artifact_sha256_after: null,
@@ -983,7 +1108,7 @@ it("records an explicit loss marker when provider bytes are invalid UTF-8", asyn
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value).toMatchObject({
-        raw_result: { stdout: "captured � output" },
+        normalized_result: { stdout: "captured � output" },
       });
       expect(result.value.limitations).toContain(
         "Captured stdout bytes contain invalid or incomplete UTF-8; replacement characters in the text capture do not preserve the original bytes.",

@@ -66,6 +66,93 @@ it("uses provider profiles supplied through the application port", async () => {
   }
 });
 
+it("preserves the caller cancellation reason after asynchronous profile preparation", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "rea-reverse-prepare-cancel-"),
+  );
+  const path = join(directory, "fixture.bin");
+  await writeFile(path, Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+  let entered!: () => void;
+  let finish!: () => void;
+  const preparing = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const reason = { request: "cancel-from-caller" };
+  const controller = new AbortController();
+  const service = new ReverseEngineeringService({
+    commands: {
+      objdump: async () => {
+        entered();
+        await preparing;
+        return {
+          executable: "unused-objdump",
+          arguments: [path],
+          identity: { id: "test.objdump", name: "Test objdump", version: null },
+        };
+      },
+      rizin: () => ({
+        executable: "unused-rizin",
+        arguments: [path],
+        identity: { id: "test.rizin", name: "Test Rizin", version: null },
+      }),
+    },
+  });
+  try {
+    const pending = service.inspectWithObjdump(
+      { path, operation: "symbols" },
+      { signal: controller.signal },
+    );
+    await ready;
+    controller.abort(reason);
+    finish();
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.cause).toBe(reason);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("returns a typed error when the invocation CWD is unavailable", async () => {
+  const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+    throw Object.assign(new Error("ENOENT: invocation directory was removed"), {
+      code: "ENOENT",
+    });
+  });
+  const service = new ReverseEngineeringService({
+    commands: {
+      objdump: () => ({
+        executable: "unused-objdump",
+        arguments: [],
+        identity: { id: "test.objdump", name: "Test objdump", version: null },
+      }),
+      rizin: () => ({
+        executable: "unused-rizin",
+        arguments: [],
+        identity: { id: "test.rizin", name: "Test Rizin", version: null },
+      }),
+    },
+  });
+  try {
+    const result = await service.inspectWithObjdump({
+      operation: "architectures",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.error).toMatchObject({
+        _tag: "AnalysisOutputError",
+        cause: { code: "ENOENT" },
+      });
+  } finally {
+    cwd.mockRestore();
+    await service.close();
+  }
+});
+
 it("does not reintroduce ambient variables absent from the captured provider environment", async () => {
   const directory = await mkdtemp(join(tmpdir(), "rea-reverse-env-"));
   const path = join(directory, "fixture.bin");
