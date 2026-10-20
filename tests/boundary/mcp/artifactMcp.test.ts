@@ -22,6 +22,7 @@ import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import { ArtifactProvider } from "../../../src/artifacts/ArtifactProvider.js";
 import { ARTIFACT_COMPARISON_EXAMPLE } from "../../../src/contracts/artifactComparisonExample.js";
 import { createServer } from "../../../src/server/createServer.js";
+import { execFileOutput } from "../../../src/process/ExecFileOutput.js";
 import { observed } from "../../fixtures/analysisExecution.js";
 
 const integrityMessage = (unpacked: boolean): string =>
@@ -102,6 +103,85 @@ it.each([
     }
   },
   20_000,
+);
+
+it.skipIf(process.platform !== "darwin")(
+  "does not offer an ineffective integrity-policy retry for a checksum-invalid DMG",
+  async () => {
+    const root = await createTestTempDirectory("rea-dmg-checksum-mcp-");
+    const writableImagePath = join(root, "writable.dmg");
+    const imagePath = join(root, "fixture.dmg");
+    await execFileOutput("/usr/bin/hdiutil", [
+      "create",
+      "-quiet",
+      "-size",
+      "1m",
+      "-layout",
+      "NONE",
+      "-type",
+      "UDIF",
+      writableImagePath,
+    ]);
+    await execFileOutput("/usr/bin/hdiutil", [
+      "convert",
+      "-quiet",
+      writableImagePath,
+      "-format",
+      "UDRO",
+      "-o",
+      imagePath,
+    ]);
+    const image = await readFile(imagePath);
+    const footer = image.subarray(-512);
+    expect(footer.subarray(0, 4).toString("ascii")).toBe("koly");
+    const corruptionOffset = Number(footer.readBigUInt64BE(24)) + 4096;
+    const originalByte = image[corruptionOffset];
+    if (originalByte === undefined)
+      throw new Error("expected a byte in the generated image data fork");
+    image[corruptionOffset] = originalByte ^ 0x01;
+    await writeFile(imagePath, image);
+
+    const session = createTestBinarySession(new ArtifactProvider(process.env));
+    const server = createServer({ kind: "session", session });
+    const client = new Client({ name: "dmg-integrity-test", version: "1" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const opened = await client.callTool({
+        name: "open_binary",
+        arguments: { path: imagePath },
+      });
+      expect(opened.isError).not.toBe(true);
+
+      const message =
+        "Artifact failed an integrity check that integrity_policy cannot relax, such as a container checksum or a source that changed while being read. Get a valid, unchanged copy and try again.";
+      for (const integrity_policy of ["fail", "record-and-continue"]) {
+        const result = await client.callTool({
+          name: "inspect_artifact",
+          arguments: { integrity_policy },
+        });
+        expect(result.isError).toBe(true);
+        expect(parseMcpToolError(result)).toMatchObject({
+          error: {
+            code: "artifact_operation_failed",
+            category: "integrity_mismatch",
+            message,
+            retryable: false,
+            remediation: { action: message },
+          },
+        });
+      }
+    } finally {
+      await Promise.allSettled([
+        client.close(),
+        server.close(),
+        session.close(),
+      ]);
+    }
+  },
+  60_000,
 );
 
 it("extracts an active archive through MCP when requested", async () => {

@@ -447,6 +447,16 @@ const artifactMessage = ({
     return `ASAR unpacked companion bytes are unavailable for ${details.logicalPath}. Select the archive in place with its .unpacked directory beside it, then retry.`;
   if (reason === "unavailable")
     return "Artifact processing is unavailable for the current target or host. Check artifact support and required tools.";
+  // integrity_policy records only declared-versus-observed digest
+  // contradictions, which carry their declared and observed facts. Container
+  // self-verification (such as a DMG checksum) and source changes fail closed
+  // under either policy, so offering a policy retry would be ineffective.
+  if (
+    reason === "integrity" &&
+    details === undefined &&
+    INTEGRITY_POLICY_OPERATIONS.has(operation)
+  )
+    return "Artifact failed an integrity check that integrity_policy cannot relax, such as a container checksum or a source that changed while being read. Get a valid, unchanged copy and try again.";
   if (reason === "integrity" && INTEGRITY_POLICY_OPERATIONS.has(operation))
     return `${
       details?.unpacked === true &&
