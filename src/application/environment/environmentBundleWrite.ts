@@ -11,6 +11,7 @@ import { AnalysisCleanupLease } from "../../artifacts/AnalysisCleanupLease.js";
 import { ArtifactFileCleanupFailure } from "../../artifacts/ArtifactFileOperation.js";
 import { RegularFileCleanupFailure } from "../../filesystem/OwnedRegularFile.js";
 import { streamChunkToBuffer } from "../../artifacts/StreamBytes.js";
+import { ArtifactReaderFailure } from "../../artifacts/ArtifactReader.js";
 import { ArtifactResourceScope } from "../../artifacts/ArtifactResourceScope.js";
 import { SafeOutputTree } from "../../artifacts/SafeOutputTree.js";
 import { SafeOutputTreeCreationFailure } from "../../artifacts/SafeOutputTreeCreationFailure.js";
@@ -72,6 +73,27 @@ const writeTarball = async (
   return { path: written.relativePath, bytes: written.bytesWritten };
 };
 
+/**
+ * Only destination admission can blame the selected directory. Path failures
+ * after admission are host write failures on bundle files, not argument refusals.
+ */
+const directoryRefusal = (cause: unknown): unknown =>
+  cause instanceof ArtifactReaderFailure &&
+  cause.reason === "path" &&
+  cause.cleanup === undefined
+    ? new AnalysisInputError(
+        ENVIRONMENT_EXPORT_OPERATION,
+        { cause, userMessage: cause.message },
+        [
+          {
+            path: ["directory"],
+            reason: "invalid_value",
+            message: cause.message,
+          },
+        ],
+      )
+    : cause;
+
 /** The output owner anchors every create and verifies the complete tree before publication. */
 const writeBundleFiles = async (
   input: EnvironmentExportInput,
@@ -81,6 +103,7 @@ const writeBundleFiles = async (
   const resources = new ArtifactResourceScope();
   let tree: SafeOutputTree | undefined;
   let written: WrittenBundleFile[] | undefined;
+  let admitted = false;
   let outcome:
     | {
         readonly kind: "completed";
@@ -97,6 +120,7 @@ const writeBundleFiles = async (
       if (cause instanceof SafeOutputTreeCreationFailure) tree = cause.tree;
       throw cause;
     }
+    admitted = true;
     written = [];
     for (const file of plan.files)
       written.push(
@@ -127,7 +151,7 @@ const writeBundleFiles = async (
   }
   if (outcome.kind === "failed") {
     if (owner?.published === true && written !== undefined) return written;
-    throw outcome.cause;
+    throw admitted ? outcome.cause : directoryRefusal(outcome.cause);
   }
   return outcome.files;
 };
