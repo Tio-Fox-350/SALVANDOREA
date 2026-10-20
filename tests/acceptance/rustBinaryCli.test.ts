@@ -165,6 +165,38 @@ cliTest("reports malformed zlib as invalid input", async ({ cli }) => {
 });
 
 cliTest(
+  "refuses an oversized dependency section with fixed-budget advice",
+  async ({ cli }) => {
+    const root = await createTestTempDirectory("rea-rust-cli-section-");
+    const path = join(root, "oversized-section.elf");
+    // Keep the ELF headers and declare a file-backed .dep-v0 one byte above
+    // the fixed 1 MiB compressed-section budget.
+    const limit = 1024 * 1024;
+    const bytes = Buffer.alloc(1024 + limit + 1);
+    createRustImage({ format: "elf" }).copy(bytes);
+    bytes.writeBigUInt64LE(BigInt(limit + 1), 384 + 32);
+    await writeFile(path, bytes);
+    const result = await cli.run({
+      arguments: ["inspect-rust-binary", path, "--json"],
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.json).toMatchObject({
+      code: "resource_constraint",
+      retryable: false,
+      remediation: { action: expect.stringContaining("maximum_bytes") },
+      details: {
+        resource: "memory",
+        reported_limits: { maximum_bytes: 1024 * 1024 },
+      },
+    });
+    // The section budget is fixed; worker or host memory cannot admit it.
+    expect(result.json).not.toMatchObject({
+      remediation: { action: expect.stringMatching(/sufficient memory/iu) },
+    });
+  },
+);
+
+cliTest(
   "releases a failed Rust descriptor close before projecting the CLI failure",
   async ({ cli }) => {
     const root = await createTestTempDirectory("rea-rust-cli-close-");

@@ -186,7 +186,18 @@ const failureForPrimary = (cause: unknown, path: string): AnalysisError => {
       cause.constraint.resource,
       `Selected artifact ${path}: ${cause.message}`,
       cause.constraint.reported_limits,
-      { cause },
+      {
+        cause,
+        // Section and inflated-JSON sizes are fixed reader budgets; worker
+        // limits and host memory cannot admit the same dependency section.
+        ...(cause.constraint.resource === "memory"
+          ? {
+              retryable: false,
+              remediationAction:
+                "maximum_bytes is a fixed Rust dependency-section budget; worker limits and available host memory do not raise it. Select another complete Rust binary whose dependency section fits the budget; retrying the unchanged artifact will fail again.",
+            }
+          : {}),
+      },
     );
   if (cause instanceof RustAuditableFormatFailure)
     return cause.kind === "unsupported"

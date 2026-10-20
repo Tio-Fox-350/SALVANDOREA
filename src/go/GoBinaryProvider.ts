@@ -62,7 +62,14 @@ const failureForPrimary = (cause: unknown, path: string): AnalysisError => {
       cause.boundary === "search" ? "cpu" : "memory",
       `Selected artifact ${path}: ${cause.message}`,
       { boundary: cause.boundary, maximum_bytes: cause.maximum_bytes },
-      { cause },
+      {
+        cause,
+        // Every boundary is a fixed parser budget with no caller override, so
+        // neither waiting nor more worker or host memory admits the same file.
+        retryable: false,
+        remediationAction:
+          "The reported boundary's maximum_bytes is a fixed Go build-info parser budget; worker limits and available host memory do not raise it. Select another complete Go binary whose metadata fits the budget; retrying the unchanged artifact will fail again.",
+      },
     );
   if (cause instanceof GoBinaryFormatFailure)
     return cause.kind === "unsupported"

@@ -1245,7 +1245,15 @@ it.each(["identify_flutter_build", "inspect_dart_aot"] as const)(
     onTestFinished(() => provider.close());
     const result = await provider.execute({ operation, input: { path } });
     if (result.ok) throw new Error("ABI expansion must be refused");
-    expect(projectAnalysisError(result.error).code).toBe("resource_constraint");
+    const projected = projectAnalysisError(result.error);
+    expect(projected).toMatchObject({
+      code: "resource_constraint",
+      retryable: false,
+      details: { reported_limits: { max_flutter_abis: 32 } },
+    });
+    // The inventory bound is fixed; worker or host memory cannot admit it.
+    expect(projected.remediation.action).toContain("max_flutter_abis");
+    expect(projected.remediation.action).not.toMatch(/sufficient memory/iu);
     expect(extract).not.toHaveBeenCalled();
   },
 );

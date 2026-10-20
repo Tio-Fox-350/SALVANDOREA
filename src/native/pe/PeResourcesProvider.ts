@@ -25,7 +25,10 @@ import {
 import { err, ok } from "../../domain/result.js";
 import { ProviderCleanupError } from "../../domain/providerCleanupError.js";
 import { PE_RESOURCES_PROVIDER } from "../../application/InvestigationProviders.js";
-import { parsePeResources } from "./PeResourceParser.js";
+import {
+  parsePeResources,
+  PE_RESOURCE_METADATA_BYTES,
+} from "./PeResourceParser.js";
 
 /** Portable parser over one bounded, identity-checked regular file. */
 export class PeResourcesProvider implements PeResourcesPort {
@@ -126,19 +129,22 @@ const peResourcesFailurePrimary = (
         {
           max_file_bytes: input.max_file_bytes,
           max_entries: input.max_entries,
+          ...(cause.boundary === "memory"
+            ? { max_metadata_bytes: PE_RESOURCE_METADATA_BYTES }
+            : {}),
         },
         {
           cause,
-          // Both bounds are caller-selected and deterministic for the same
-          // input, so waiting for an active analysis cannot help.
-          ...(cause.boundary === undefined || cause.boundary === "memory"
+          // Every bound is deterministic for the same input, so waiting for an
+          // active analysis or adding worker or host memory cannot help.
+          ...(cause.boundary === undefined
             ? {}
             : {
                 retryable: false,
-                remediationAction: inputBudgetRemediation(
-                  cause.boundary,
-                  input,
-                ),
+                remediationAction:
+                  cause.boundary === "memory"
+                    ? "max_metadata_bytes is a fixed PE resource metadata budget; max_entries, max_file_bytes, worker limits, and available host memory do not raise it. Select a complete PE image whose resource metadata fits the budget; retrying the unchanged image will fail again."
+                    : inputBudgetRemediation(cause.boundary, input),
               }),
         },
       );

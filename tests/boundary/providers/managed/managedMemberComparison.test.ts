@@ -664,6 +664,11 @@ describe("managed comparison snapshot admission and cleanup", () => {
           max_snapshot_bytes: MAX_MANAGED_SNAPSHOT_BYTES,
         },
       });
+      const projected = projectAnalysisError(result.error);
+      expect(projected.retryable).toBe(false);
+      // The snapshot budget is fixed; worker or host memory cannot admit it.
+      expect(projected.remediation.action).toContain("max_snapshot_bytes");
+      expect(projected.remediation.action).not.toMatch(/sufficient memory/iu);
       expect(read).not.toHaveBeenCalled();
     } finally {
       read.mockRestore();

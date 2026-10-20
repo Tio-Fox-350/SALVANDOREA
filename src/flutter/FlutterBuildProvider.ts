@@ -296,6 +296,13 @@ const collectFlutterLibraries = async (
             max_flutter_abis: MAX_FLUTTER_ABIS,
             max_library_path_bytes: MAX_FLUTTER_LIBRARY_PATH_BYTES,
           },
+          {
+            // Both inventory bounds are fixed; neither waiting nor more worker
+            // or host memory admits the same package.
+            retryable: false,
+            remediationAction:
+              "max_flutter_abis and max_library_path_bytes are fixed Flutter library inventory budgets; worker limits and available host memory do not raise them. Select a complete APK within those budgets, such as a per-ABI split APK; retrying the unchanged package will fail again.",
+          },
         );
       libraries.push({
         entry,

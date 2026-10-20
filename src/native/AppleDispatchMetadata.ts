@@ -217,6 +217,13 @@ export const inspectAppleDispatchMetadata = async (
       "memory",
       "Apple static metadata input exceeds its 64 MiB snapshot budget",
       { input_bytes: maximumBytes },
+      {
+        // The snapshot budget is fixed, so neither waiting nor more worker or
+        // host memory admits the same target.
+        retryable: false,
+        remediationAction:
+          "input_bytes is the fixed 64 MiB static dispatch-metadata snapshot budget; worker limits and available host memory do not raise it. Select a complete Mach-O within the budget; retrying the unchanged target will fail again.",
+      },
     );
   const cancelled = () =>
     new AnalysisCancelledError("inspect_native_dispatch_metadata", {

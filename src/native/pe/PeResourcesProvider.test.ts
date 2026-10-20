@@ -172,3 +172,35 @@ describe("PE resource provider budget reporting", () => {
     });
   });
 });
+
+describe("PE resource provider fixed metadata budget", () => {
+  it("reports the fixed metadata budget without worker memory advice", async () => {
+    const root = await createTestTempDirectory("rea-pe-metadata-budget-");
+    const path = join(root, "resource.exe");
+    const name = "n".repeat(200);
+    const resources = Array.from({ length: 6000 }, (_, index) => ({
+      type: 10,
+      name: `${name}${String(index).padStart(4, "0")}`,
+      language: 1033,
+      payload: Buffer.alloc(0),
+    }));
+    await writeFile(
+      path,
+      peResourceFixture(false, resources, 10 * 1024 * 1024).bytes,
+    );
+    const result = await inspect(path);
+    if (result.ok) throw new Error("Expected a refusal");
+    const projected = projectAnalysisError(result.error);
+    expect(projected).toMatchObject({
+      code: "resource_constraint",
+      retryable: false,
+      details: {
+        resource: "memory",
+        reported_limits: { max_metadata_bytes: 8 * 1024 * 1024 },
+      },
+    });
+    // Neither caller bounds nor worker or host memory raise the fixed budget.
+    expect(projected.remediation.action).toContain("max_metadata_bytes");
+    expect(projected.remediation.action).not.toMatch(/sufficient memory/iu);
+  });
+});

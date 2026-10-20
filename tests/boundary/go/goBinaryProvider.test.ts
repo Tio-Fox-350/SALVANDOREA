@@ -7,6 +7,7 @@ import {
   AnalysisResourceConstraintError,
   AnalysisUnsupportedTargetError,
 } from "../../../src/domain/analysisErrorCore.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 import {
   createGoBinaryDiagnosticFixtures,
   createGoBinaryFixture,
@@ -67,6 +68,11 @@ it("preserves the actual build-info byte guard as a resource failure", async () 
     boundary: "build-info",
     maximum_bytes: 1024 * 1024,
   });
+  const projected = projectAnalysisError(result.error);
+  expect(projected.retryable).toBe(false);
+  // The parser budget is fixed; worker or host memory cannot admit it.
+  expect(projected.remediation.action).toContain("maximum_bytes");
+  expect(projected.remediation.action).not.toMatch(/sufficient memory/iu);
 });
 
 it.skipIf(process.platform === "win32")(

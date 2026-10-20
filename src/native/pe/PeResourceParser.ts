@@ -19,7 +19,8 @@ type Range = { offset: number; bytes: number };
 type OccupiedRange = Range & {
   kind: "directory" | "name" | "data-entry" | "payload";
 };
-const METADATA_BYTES = 8 * 1024 * 1024;
+/** Fixed complete-result metadata budget; callers cannot raise it. */
+export const PE_RESOURCE_METADATA_BYTES = 8 * 1024 * 1024;
 const limit = (message: string, boundary: ArtifactReaderBoundary): never => {
   throw new ArtifactReaderFailure("limit", message, { boundary });
 };
@@ -51,7 +52,7 @@ export const parsePeResources = async (
   let examined = 0;
   let metadataBytes = 0;
   const ensureCapacity = (projectedBytes: number): void => {
-    if (metadataBytes + projectedBytes > METADATA_BYTES)
+    if (metadataBytes + projectedBytes > PE_RESOURCE_METADATA_BYTES)
       limit(
         "PE resource metadata exceeds the 8 MiB complete-result allocation budget.",
         "memory",
@@ -63,7 +64,9 @@ export const parsePeResources = async (
   };
   const account = (value: unknown): void => {
     // Rows are retained in arrays; reserve a separator along with each row.
-    accountBytes(jsonBytes(value, METADATA_BYTES - metadataBytes - 1) + 1);
+    accountBytes(
+      jsonBytes(value, PE_RESOURCE_METADATA_BYTES - metadataBytes - 1) + 1,
+    );
   };
   const reserveDecodedName = (utf16Units: number): void => {
     // A JSON string can need six ASCII bytes per UTF-16 code unit (for example,
@@ -254,7 +257,9 @@ export const parsePeResources = async (
     ],
   };
   assertArtifactReadActive(signal);
-  if (jsonBytes(report, METADATA_BYTES) > METADATA_BYTES)
+  if (
+    jsonBytes(report, PE_RESOURCE_METADATA_BYTES) > PE_RESOURCE_METADATA_BYTES
+  )
     limit("PE resource result exceeds the 8 MiB allocation budget.", "memory");
   return report;
 };

@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { truncate, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
+import {
+  NativeFixtureRunner,
+  nativeMachoTarget,
+} from "../../tests/fixtures/nativeCommands.js";
 import { machoWithPropertyAttributes } from "../../tests/fixtures/objcPropertyMacho.js";
 import { objcRecordBudgetMacho } from "../../tests/fixtures/objcRecordBudgetMacho.js";
+import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
 import { decodeAppleDispatchMetadata } from "./AppleDispatchMetadata.js";
+import { NativeMacOSProvider } from "./NativeMacOSProvider.js";
 
 const base = 0x100000000n;
 const fixture = (
@@ -1373,5 +1382,36 @@ describe("malformed Objective-C protocol method lists", () => {
         "Protocol 0x100000740: Objective-C protocol FixtureProtocol required instance method 0 at 0x100000808 has an empty selector",
       ),
     });
+  });
+});
+
+describe("Apple dispatch snapshot budget", () => {
+  it("refuses a target above the fixed snapshot budget without worker memory advice", async () => {
+    const root = await createTestTempDirectory("rea-dispatch-snapshot-");
+    const path = join(root, "large.macho");
+    await writeFile(path, Buffer.alloc(0));
+    await truncate(path, 64 * 1024 * 1024 + 1);
+    const client = new NativeMacOSProvider(
+      {},
+      new NativeFixtureRunner({}),
+      "darwin",
+    ).createClient(nativeMachoTarget(path));
+    onTestFinished(async () => {
+      await client.close();
+    });
+    const result = await client.execute("inspect_native_dispatch_metadata", {});
+    if (result.ok) throw new Error("Expected a snapshot budget refusal");
+    const projected = projectAnalysisError(result.error);
+    expect(projected).toMatchObject({
+      code: "resource_constraint",
+      retryable: false,
+      details: {
+        resource: "memory",
+        reported_limits: { input_bytes: 64 * 1024 * 1024 },
+      },
+    });
+    // The snapshot budget is fixed; worker or host memory cannot admit it.
+    expect(projected.remediation.action).toContain("input_bytes");
+    expect(projected.remediation.action).not.toMatch(/sufficient memory/iu);
   });
 });

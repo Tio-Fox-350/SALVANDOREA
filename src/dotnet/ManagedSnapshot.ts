@@ -42,6 +42,13 @@ const managedSnapshotCapacityError = (
     "memory",
     "Managed static inspection requires an eagerly retained PE snapshot within its input byte budget.",
     { max_snapshot_bytes: MAX_MANAGED_SNAPSHOT_BYTES },
+    {
+      // The snapshot budget is fixed, so neither waiting nor more worker or
+      // host memory admits the same input.
+      retryable: false,
+      remediationAction:
+        "max_snapshot_bytes is a fixed managed-inspection snapshot budget; worker limits and available host memory do not raise it. Select a complete managed assembly within the budget; retrying the unchanged artifact will fail again.",
+    },
   );
 
 export const readManagedSnapshot = async (
