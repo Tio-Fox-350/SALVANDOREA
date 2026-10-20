@@ -13,6 +13,12 @@ import {
 import type { CliInstance } from "./types.js";
 import { runCliJavaScriptApplicationAnalysis } from "./javascriptApplicationAnalysis.js";
 import { withCommandCancellation } from "./commandCancellation.js";
+import {
+  analysisEvidenceDeliveryOptions,
+  cliEvidenceDeliveryInputError,
+  publishCliAnalysisEvidence,
+} from "./analysisEvidenceDelivery.js";
+import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { javascriptApplicationOptions } from "../cliObservationOptions.js";
 import { AnalysisInputError } from "../domain/analysisErrorCore.js";
 import { absoluteCallerPath } from "../filesystem/callerPath.js";
@@ -370,23 +376,37 @@ const registerFunctionCommand = (
         .min(1)
         .optional()
         .describe("Load and update a local analysis snapshot"),
+      ...analysisEvidenceDeliveryOptions,
       ...nativeOpenOptionFields,
     }),
     run: ({ args, options }) =>
-      logCliCommand(logger, "function", () =>
-        runDirectAnalysis(
-          args.path,
-          "analyze_function",
-          {
-            procedure: resolveCliAnalysisSelector(
-              args.address,
-              options.procedure,
-              "procedure",
-              "analyze_function",
-            ),
-          },
-          directAnalysisOptionsFromCli(logger, options),
-        ),
+      withCommandCancellation((signal) =>
+        logCliCommand(logger, "function", async () => {
+          const delivery = {
+            providerId: "auto",
+            operation: "analyze_function",
+            signal,
+            detail: options.detail,
+            evidenceOutput: options.evidence_output,
+          };
+          // Fail before analysis when summary delivery lacks its Evidence bundle sink.
+          const inputError = cliEvidenceDeliveryInputError(delivery);
+          if (inputError !== undefined) return projectAnalysisError(inputError);
+          const complete = await runDirectAnalysis(
+            args.path,
+            "analyze_function",
+            {
+              procedure: resolveCliAnalysisSelector(
+                args.address,
+                options.procedure,
+                "procedure",
+                "analyze_function",
+              ),
+            },
+            { ...directAnalysisOptionsFromCli(logger, options), signal },
+          );
+          return publishCliAnalysisEvidence(complete, delivery);
+        }),
       ),
   });
 };
