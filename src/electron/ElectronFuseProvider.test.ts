@@ -573,10 +573,16 @@ it("enforces the 32 sentinel boundary with typed and public limit details", asyn
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error._tag).toBe("AnalysisResourceConstraintError");
-        expect(projectAnalysisError(result.error)).toMatchObject({
+        const projected = projectAnalysisError(result.error);
+        expect(projected).toMatchObject({
           code: "resource_constraint",
+          retryable: false,
           details: { reported_limits: { maximum_sentinels_per_slice: 32 } },
         });
+        expect(projected.remediation.action).toContain(
+          "maximum_sentinels_per_slice",
+        );
+        expect(projected.remediation.action).not.toMatch(/wait/iu);
       }
     }
   }
@@ -591,10 +597,14 @@ it("rejects a sparse artifact over 1 GiB before scanning", async () => {
   expect(result.ok).toBe(false);
   if (!result.ok) {
     expect(result.error._tag).toBe("AnalysisResourceConstraintError");
-    expect(projectAnalysisError(result.error)).toMatchObject({
+    const projected = projectAnalysisError(result.error);
+    expect(projected).toMatchObject({
       code: "resource_constraint",
+      retryable: false,
       details: { reported_limits: { maximum_input_bytes: 1024 * 1024 * 1024 } },
     });
+    expect(projected.remediation.action).toContain("maximum_input_bytes");
+    expect(projected.remediation.action).not.toMatch(/allowance/iu);
   }
 });
 

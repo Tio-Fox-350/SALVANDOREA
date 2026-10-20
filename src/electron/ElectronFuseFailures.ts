@@ -25,6 +25,7 @@ import {
 } from "../filesystem/RegularFile.js";
 import { ElectronFusePathFailure } from "./ElectronFusePath.js";
 import {
+  ELECTRON_FUSE_LIMITS,
   ElectronFuseFormatFailure,
   ElectronFuseResourceFailure,
 } from "./ElectronFuseReader.js";
@@ -91,9 +92,21 @@ export const electronFuseFailure = (
       cause.boundary === "file-size" ? "file-size" : "capacity",
       cause.message,
       cause.boundary === "file-size"
-        ? { maximum_input_bytes: 1024 * 1024 * 1024 }
-        : { maximum_sentinels_per_slice: 32 },
-      { cause },
+        ? { maximum_input_bytes: ELECTRON_FUSE_LIMITS.maximumFileBytes }
+        : {
+            maximum_sentinels_per_slice:
+              ELECTRON_FUSE_LIMITS.maximumSentinelsPerSlice,
+          },
+      {
+        cause,
+        // Both bounds are fixed reader limits with no caller override, so
+        // neither waiting nor a larger reply allowance admits the same file.
+        retryable: false,
+        remediationAction:
+          cause.boundary === "file-size"
+            ? "Select an Electron executable within maximum_input_bytes; this fixed reader bound has no override, and retrying the unchanged file will fail again."
+            : "Select an Electron executable whose slices each contain at most maximum_sentinels_per_slice fuse sentinels; this fixed reader bound has no override, and retrying the unchanged file will fail again.",
+      },
     );
   if (cause instanceof ElectronFuseFormatFailure)
     return cause.kind === "unsupported"
