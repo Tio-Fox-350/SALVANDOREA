@@ -197,6 +197,14 @@ export const projectSemanticReturnValues = (
   for (const callable of context.ir.callables)
     for (const site of callable.returnSites) {
       const returnNode = context.returnSiteNodes.get(site.returnSiteId);
+      // A non-identifier return evaluated to one exact primitive is defined by
+      // its literal (see projectSemanticValues); references inside it, such as
+      // a member read's receiver, are not candidates for the returned value.
+      if (
+        site.identityReferenceLocation === null &&
+        site.value.status === "literal"
+      )
+        continue;
       const references = context.referenceNodesWithin(site.location);
       for (const reference of references)
         addSemanticGraphRelation(context.state, {

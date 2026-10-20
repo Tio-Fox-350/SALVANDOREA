@@ -94,6 +94,37 @@ it.each([
   },
 );
 
+it.each([false, true])(
+  "traces a directly returned member read back to its literal (candidates: %s)",
+  (candidates) => {
+    const graph = graphFor(`
+      const settings = { index: "products" };
+      function viaLocal() { const value = settings.index; return value; }
+      function viaMember() { return settings.index; }
+      const a = viaLocal();
+      const b = viaMember();
+    `);
+    for (const label of ["a", "b"]) {
+      const binding = graph.nodes.find(
+        (node) => node.kind === "binding" && node.label === label,
+      );
+      if (binding === undefined) throw new Error(`Expected binding ${label}`);
+      const trace = queryJavaScriptSemanticGraph(graph, {
+        seed: { kind: "semantic-node", node_id: binding.node_id },
+        direction: "backward-provenance",
+        include_ambiguous_dynamic_edges: candidates,
+      });
+      expect(trace.status, label).toBe("found");
+      expect(
+        trace.nodes.filter(({ kind }) => kind === "literal"),
+        label,
+      ).toEqual([
+        expect.objectContaining({ properties: { value: "products" } }),
+      ]);
+    }
+  },
+);
+
 it("projects closure and direct interprocedural flow without execution", () => {
   const graph = graphFor(`
       const outer = 2;
